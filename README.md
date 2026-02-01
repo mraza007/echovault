@@ -112,6 +112,31 @@ Add to your Claude Code settings to automatically surface relevant memories on e
 | `memory config` | Show effective config |
 | `memory reindex` | Rebuild vectors after changing provider |
 
+## Uninstall
+
+To completely remove EchoVault:
+
+```bash
+# 1. Remove the CLI
+pip uninstall echovault
+
+# 2. Remove the vault data and index
+rm -rf ~/.memory/
+
+# 3. Remove the agent skill (whichever you installed)
+rm -rf ~/.claude/skills/echovault   # Claude Code
+rm -rf ~/.codex/skills/echovault    # Codex
+rm -rf ~/.cursor/skills/echovault   # Cursor
+```
+
+If you installed via [skills.sh](https://skills.sh):
+
+```bash
+npx skills remove mraza007/echovault
+```
+
+If you added the Claude Code hook, remove the `UserPromptSubmit` entry from your Claude Code settings.
+
 ## Privacy
 
 Everything stays local by default. If you configure OpenAI or OpenRouter for embeddings, those API calls go to their servers. Use Ollama for fully local operation.

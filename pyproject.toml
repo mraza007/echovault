@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-local-memory"
+name = "echovault"
 version = "0.1.0"
-description = "RAM-optimized memory system for coding agents with Obsidian-native markdown storage"
+description = "Local-first memory system for coding agents with Obsidian-native markdown storage"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
