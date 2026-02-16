@@ -826,8 +826,8 @@ def test_setup_cursor_project_flag(env_home, tmp_path, monkeypatch):
     result = runner.invoke(main, ["setup", "cursor", "--project"])
 
     assert result.exit_code == 0
-    hooks_path = tmp_path / ".cursor" / "hooks.json"
-    assert hooks_path.exists()
+    mcp_path = tmp_path / ".cursor" / "mcp.json"
+    assert mcp_path.exists()
 
 
 def test_setup_codex_project_flag(env_home, tmp_path, monkeypatch):
@@ -852,3 +852,14 @@ def test_uninstall_claude_code_project_flag(env_home, tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "Removed" in result.output
+
+
+def test_mcp_command_exists():
+    """Test that the mcp command is registered."""
+    from click.testing import CliRunner
+    from memory.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["mcp", "--help"])
+    assert result.exit_code == 0
+    assert "mcp" in result.output.lower() or "stdio" in result.output.lower()

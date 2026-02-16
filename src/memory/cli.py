@@ -17,7 +17,7 @@ from memory.models import RawMemoryInput
 
 
 def _redact_api_keys(data: dict) -> dict:
-    for section in ("embedding", "enrichment"):
+    for section in ("embedding",):
         config = data.get(section)
         if isinstance(config, dict) and config.get("api_key"):
             config["api_key"] = "<redacted>"
@@ -58,14 +58,9 @@ _CONFIG_TEMPLATE = """\
 # Embedding provider for semantic search.
 # Without this, keyword search (FTS5) still works.
 embedding:
-  provider: ollama              # ollama | openai | openrouter
+  provider: ollama              # ollama | openai
   model: nomic-embed-text
-  # api_key: sk-...            # required for openai / openrouter
-
-# Optional LLM enrichment (auto-tags, better summaries).
-# Set to "none" to skip.
-enrichment:
-  provider: none                # none | ollama | openai | openrouter
+  # api_key: sk-...            # required for openai
 
 # How memories are retrieved at session start.
 # "auto" uses vectors when available, falls back to keywords.
@@ -103,7 +98,7 @@ def config_init(force):
 @click.option("--tags", default="", help="Comma-separated tags")
 @click.option(
     "--category",
-    type=click.Choice(["decision", "pattern", "bug", "context", "learning", "miscellaneous"]),
+    type=click.Choice(["decision", "pattern", "bug", "context", "learning"]),
     default=None,
     help="Category of the memory",
 )
@@ -111,12 +106,7 @@ def config_init(force):
 @click.option("--details", default=None, help="Extended details or context")
 @click.option("--source", default=None, help="Source of the memory")
 @click.option("--project", default=None, help="Project name")
-@click.option(
-    "--enrich/--no-enrich",
-    default=False,
-    help="Generate extra tags via enrichment provider",
-)
-def save(title, what, why, impact, tags, category, related_files, details, source, project, enrich):
+def save(title, what, why, impact, tags, category, related_files, details, source, project):
     """Save a memory to the current session."""
     project = project or os.path.basename(os.getcwd())
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
@@ -135,37 +125,11 @@ def save(title, what, why, impact, tags, category, related_files, details, sourc
     )
 
     svc = MemoryService()
-    result = svc.save(raw, project=project, enrich=enrich)
+    result = svc.save(raw, project=project)
     svc.close()
 
     click.echo(f"Saved: {title} (id: {result['id']})")
     click.echo(f"File: {result['file_path']}")
-
-
-@main.command("auto-save")
-@click.option(
-    "--project",
-    is_flag=True,
-    default=False,
-    help="Use current directory name as project",
-)
-@click.option("--source", default=None, help="Source identifier (e.g. claude-code)")
-def auto_save(project, source):
-    """Auto-save a memory from agent response (reads stdin)."""
-    import sys as _sys
-
-    response = _sys.stdin.read()
-    if not response.strip():
-        return
-
-    project_name = os.path.basename(os.getcwd()) if project else None
-
-    svc = MemoryService()
-    result = svc.auto_save(response, project=project_name, source=source)
-    svc.close()
-
-    if result:
-        click.echo(f"Auto-saved: {result['id']}")
 
 
 @main.command()
@@ -503,6 +467,15 @@ def uninstall_codex_cmd(config_dir, project):
     target = _resolve_config_dir(".codex", config_dir, project)
     result = uninstall_codex(target)
     click.echo(result["message"])
+
+
+@main.command()
+def mcp():
+    """Start the EchoVault MCP server (stdio transport)."""
+    import asyncio
+    from memory.mcp_server import run_server
+
+    asyncio.run(run_server())
 
 
 if __name__ == "__main__":
