@@ -14,17 +14,21 @@ from memory.models import RawMemoryInput
 
 VALID_CATEGORIES = ("decision", "bug", "pattern", "learning", "context")
 
-SAVE_DESCRIPTION = """Save a memory for future sessions. Call this when you:
-- Make an architectural or design decision (chose X over Y)
-- Fix a bug (include root cause and solution)
-- Discover a non-obvious pattern or gotcha
-- Learn something about the codebase not obvious from code
+SAVE_DESCRIPTION = """Save a memory for future sessions. You MUST call this before ending any session where you made changes, fixed bugs, made decisions, or learned something. This is not optional — failing to save means the next session starts from zero.
+
+Save when you:
+- Made an architectural or design decision (chose X over Y)
+- Fixed a bug (include root cause and solution)
+- Discovered a non-obvious pattern or gotcha
+- Learned something about the codebase not obvious from code
+- Set up infrastructure, tooling, or configuration
+- The user corrected you or clarified a requirement
 
 Do NOT save: trivial changes (typos, formatting), info obvious from reading the code, or duplicates of existing memories. Write for a future agent with zero context."""
 
-SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Returns matching memories ranked by relevance. Use this to find prior decisions, bugs, patterns, and context before starting work."""
+SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Returns matching memories ranked by relevance. You MUST call this at session start before doing any work, and whenever the user's request relates to a topic that may have prior context."""
 
-CONTEXT_DESCRIPTION = """Get memory context for the current project. Call this at session start to load prior decisions, bugs, and context. Returns recent and relevant memories. Use memory_search for specific topics."""
+CONTEXT_DESCRIPTION = """Get memory context for the current project. You MUST call this at session start to load prior decisions, bugs, and context. Do not skip this step — prior sessions contain decisions and context that directly affect your current task. Use memory_search for specific topics."""
 
 
 def handle_memory_save(
@@ -144,7 +148,7 @@ def handle_memory_context(
         "total": total,
         "showing": len(memories),
         "memories": memories,
-        "message": "Use memory_search for specific topics. Use memory_save to persist decisions and discoveries.",
+        "message": "Use memory_search for specific topics. IMPORTANT: You MUST call memory_save before this session ends if you make any changes, decisions, or discoveries.",
     })
 
 

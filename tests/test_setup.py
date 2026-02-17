@@ -30,7 +30,7 @@ def _mcp_json_path(claude_home):
 class TestClaudeCodeSetup:
     def test_writes_mcp_server_config(self, claude_home):
         from memory.setup import setup_claude_code
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         mcp_path = _mcp_json_path(claude_home)
         assert mcp_path.exists()
         data = json.loads(mcp_path.read_text())
@@ -42,7 +42,7 @@ class TestClaudeCodeSetup:
 
     def test_does_not_write_hooks(self, claude_home):
         from memory.setup import setup_claude_code
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         settings_path = claude_home / "settings.json"
         if settings_path.exists():
             settings = json.loads(settings_path.read_text())
@@ -51,14 +51,14 @@ class TestClaudeCodeSetup:
     def test_preserves_existing_settings(self, claude_home):
         from memory.setup import setup_claude_code
         (claude_home / "settings.json").write_text(json.dumps({"permissions": {"allow": ["Bash(memory:*)"]}}, indent=2))
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         settings = json.loads((claude_home / "settings.json").read_text())
         assert settings["permissions"]["allow"] == ["Bash(memory:*)"]
 
     def test_does_not_duplicate_mcp_config(self, claude_home):
         from memory.setup import setup_claude_code
-        setup_claude_code(str(claude_home))
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
+        setup_claude_code(str(claude_home), project=True)
         data = json.loads(_mcp_json_path(claude_home).read_text())
         assert "echovault" in data["mcpServers"]
 
@@ -71,7 +71,7 @@ class TestClaudeCodeSetup:
             }
         }
         (claude_home / "settings.json").write_text(json.dumps(old_settings, indent=2))
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         settings = json.loads((claude_home / "settings.json").read_text())
         assert "hooks" not in settings or "UserPromptSubmit" not in settings.get("hooks", {})
         data = json.loads(_mcp_json_path(claude_home).read_text())
@@ -84,7 +84,7 @@ class TestClaudeCodeSetup:
             "permissions": {"allow": []}
         }
         (claude_home / "settings.json").write_text(json.dumps(old_settings, indent=2))
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         # Should be removed from settings.json
         settings = json.loads((claude_home / "settings.json").read_text())
         assert "mcpServers" not in settings
@@ -97,13 +97,28 @@ class TestClaudeCodeSetup:
         skill_dir = claude_home / "skills" / "echovault"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("old skill")
-        setup_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
         assert not skill_dir.exists()
 
     def test_returns_success_result(self, claude_home):
         from memory.setup import setup_claude_code
-        result = setup_claude_code(str(claude_home))
+        result = setup_claude_code(str(claude_home), project=True)
         assert result["status"] == "ok"
+
+    def test_global_install_writes_to_claude_json(self, tmp_path, monkeypatch):
+        from memory.setup import setup_claude_code
+        claude_home = tmp_path / ".claude"
+        claude_home.mkdir()
+        claude_json = tmp_path / ".claude.json"
+        monkeypatch.setenv("HOME", str(tmp_path))
+        # Patch expanduser to use tmp_path
+        monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path) if p == "~" else p)
+        setup_claude_code(str(claude_home), project=False)
+        assert claude_json.exists()
+        data = json.loads(claude_json.read_text())
+        assert "echovault" in data["mcpServers"]
+        # .mcp.json should NOT be created for global install
+        assert not (tmp_path / ".mcp.json").exists()
 
 
 @pytest.fixture
@@ -214,11 +229,152 @@ class TestCodexSetup:
         assert result["status"] == "ok"
 
 
+class TestOpenCodeSetup:
+    def test_creates_opencode_json_with_mcp(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode
+        monkeypatch.chdir(tmp_path)
+        result = setup_opencode(project=True)
+        assert result["status"] == "ok"
+        path = tmp_path / "opencode.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert "mcp" in data
+        assert "echovault" in data["mcp"]
+        cfg = data["mcp"]["echovault"]
+        assert cfg["type"] == "local"
+        assert cfg["command"] == ["memory", "mcp"]
+
+    def test_idempotent(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode
+        monkeypatch.chdir(tmp_path)
+        setup_opencode(project=True)
+        result = setup_opencode(project=True)
+        assert result["message"] == "Already installed"
+
+    def test_preserves_existing_config(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode
+        monkeypatch.chdir(tmp_path)
+        existing = {"theme": "dark", "mcp": {"other-tool": {"type": "local", "command": ["other"]}}}
+        (tmp_path / "opencode.json").write_text(json.dumps(existing, indent=2))
+        setup_opencode(project=True)
+        data = json.loads((tmp_path / "opencode.json").read_text())
+        assert data["theme"] == "dark"
+        assert "other-tool" in data["mcp"]
+        assert "echovault" in data["mcp"]
+
+    def test_uninstall_removes_entry(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode, uninstall_opencode
+        monkeypatch.chdir(tmp_path)
+        setup_opencode(project=True)
+        result = uninstall_opencode(project=True)
+        assert result["status"] == "ok"
+        assert "Removed" in result["message"]
+        # File should be removed since it was empty besides mcp
+        assert not (tmp_path / "opencode.json").exists()
+
+    def test_uninstall_preserves_other_config(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode, uninstall_opencode
+        monkeypatch.chdir(tmp_path)
+        existing = {"theme": "dark"}
+        (tmp_path / "opencode.json").write_text(json.dumps(existing, indent=2))
+        setup_opencode(project=True)
+        uninstall_opencode(project=True)
+        data = json.loads((tmp_path / "opencode.json").read_text())
+        assert data["theme"] == "dark"
+        assert "mcp" not in data
+
+    def test_uninstall_noop_when_not_installed(self, tmp_path, monkeypatch):
+        from memory.setup import uninstall_opencode
+        monkeypatch.chdir(tmp_path)
+        result = uninstall_opencode(project=True)
+        assert result["message"] == "Nothing to remove"
+
+    def test_global_path(self, tmp_path, monkeypatch):
+        from memory.setup import setup_opencode
+        monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path) if p == "~" else p)
+        result = setup_opencode(project=False)
+        assert result["status"] == "ok"
+        path = tmp_path / ".config" / "opencode" / "opencode.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert "echovault" in data["mcp"]
+
+
+class TestCodexTomlMcp:
+    def test_setup_creates_config_toml(self, codex_home):
+        from memory.setup import setup_codex
+        setup_codex(str(codex_home))
+        toml_path = codex_home / "config.toml"
+        assert toml_path.exists()
+        content = toml_path.read_text()
+        assert "mcp_servers" in content
+        assert "echovault" in content
+        assert "memory" in content
+
+    def test_setup_creates_both_agents_md_and_config_toml(self, codex_home):
+        from memory.setup import setup_codex
+        setup_codex(str(codex_home))
+        assert (codex_home / "AGENTS.md").exists()
+        assert (codex_home / "config.toml").exists()
+
+    def test_uninstall_removes_config_toml_entry(self, codex_home):
+        from memory.setup import setup_codex, uninstall_codex
+        setup_codex(str(codex_home))
+        uninstall_codex(str(codex_home))
+        toml_path = codex_home / "config.toml"
+        if toml_path.exists():
+            content = toml_path.read_text()
+            assert "echovault" not in content
+
+    def test_toml_preserves_other_sections(self, codex_home):
+        from memory.setup import _read_toml, _write_toml, _install_toml_mcp, _uninstall_toml_mcp
+        toml_path = str(codex_home / "config.toml")
+        # Write initial config with another section
+        _write_toml(toml_path, {"model": "gpt-4", "mcp_servers": {"other": {"command": "other", "args": []}}})
+        _install_toml_mcp(toml_path)
+        data = _read_toml(toml_path)
+        assert "echovault" in data["mcp_servers"]
+        assert "other" in data["mcp_servers"]
+        _uninstall_toml_mcp(toml_path)
+        data = _read_toml(toml_path)
+        assert "echovault" not in data.get("mcp_servers", {})
+        assert "other" in data["mcp_servers"]
+
+
+class TestTomlRoundtrip:
+    def test_read_write_preserves_structure(self, tmp_path):
+        from memory.setup import _read_toml, _write_toml
+        path = str(tmp_path / "test.toml")
+        original = {
+            "model": "gpt-4",
+            "mcp_servers": {
+                "echovault": {"command": "memory", "args": ["mcp"]},
+                "other": {"command": "other", "args": ["--flag"]},
+            },
+        }
+        _write_toml(path, original)
+        result = _read_toml(path)
+        assert result["model"] == "gpt-4"
+        assert result["mcp_servers"]["echovault"]["command"] == "memory"
+        assert result["mcp_servers"]["echovault"]["args"] == ["mcp"]
+        assert result["mcp_servers"]["other"]["command"] == "other"
+
+    def test_empty_file_returns_empty_dict(self, tmp_path):
+        from memory.setup import _read_toml
+        path = str(tmp_path / "empty.toml")
+        (tmp_path / "empty.toml").write_text("")
+        assert _read_toml(path) == {}
+
+    def test_missing_file_returns_empty_dict(self, tmp_path):
+        from memory.setup import _read_toml
+        assert _read_toml(str(tmp_path / "missing.toml")) == {}
+
+
 class TestUninstall:
     def test_uninstall_claude_code_removes_mcp_config(self, claude_home):
         from memory.setup import setup_claude_code, uninstall_claude_code
-        setup_claude_code(str(claude_home))
-        uninstall_claude_code(str(claude_home))
+        setup_claude_code(str(claude_home), project=True)
+        uninstall_claude_code(str(claude_home), project=True)
         mcp_path = _mcp_json_path(claude_home)
         if mcp_path.exists():
             data = json.loads(mcp_path.read_text())
@@ -233,7 +389,7 @@ class TestUninstall:
             }
         }
         (claude_home / "settings.json").write_text(json.dumps(old_settings, indent=2))
-        uninstall_claude_code(str(claude_home))
+        uninstall_claude_code(str(claude_home), project=True)
         settings = json.loads((claude_home / "settings.json").read_text())
         assert "UserPromptSubmit" not in settings.get("hooks", {})
         assert "PreToolUse" in settings.get("hooks", {})
@@ -242,8 +398,11 @@ class TestUninstall:
         from memory.setup import setup_cursor, uninstall_cursor
         setup_cursor(str(cursor_home))
         uninstall_cursor(str(cursor_home))
-        data = json.loads((cursor_home / "mcp.json").read_text())
-        assert "echovault" not in data.get("mcpServers", {})
+        mcp_path = cursor_home / "mcp.json"
+        if mcp_path.exists():
+            data = json.loads(mcp_path.read_text())
+            assert "echovault" not in data.get("mcpServers", {})
+        # File may be removed entirely if no other config remains
 
     def test_uninstall_codex_removes_section(self, codex_home):
         from memory.setup import setup_codex, uninstall_codex
@@ -254,5 +413,5 @@ class TestUninstall:
 
     def test_uninstall_noop_when_not_installed(self, claude_home):
         from memory.setup import uninstall_claude_code
-        result = uninstall_claude_code(str(claude_home))
+        result = uninstall_claude_code(str(claude_home), project=True)
         assert result["status"] == "ok"

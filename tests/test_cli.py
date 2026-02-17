@@ -854,6 +854,57 @@ def test_uninstall_claude_code_project_flag(env_home, tmp_path, monkeypatch):
     assert "Removed" in result.output
 
 
+def test_setup_opencode_project_flag(env_home, tmp_path, monkeypatch):
+    """Test that --project installs opencode.json in cwd."""
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "opencode", "--project"])
+
+    assert result.exit_code == 0
+    opencode_path = tmp_path / "opencode.json"
+    assert opencode_path.exists()
+    import json
+    data = json.loads(opencode_path.read_text())
+    assert "echovault" in data["mcp"]
+    assert data["mcp"]["echovault"]["type"] == "local"
+    assert data["mcp"]["echovault"]["command"] == ["memory", "mcp"]
+
+
+def test_uninstall_opencode_project_flag(env_home, tmp_path, monkeypatch):
+    """Test that --project uninstalls opencode.json from cwd."""
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    runner.invoke(main, ["setup", "opencode", "--project"])
+    result = runner.invoke(main, ["uninstall", "opencode", "--project"])
+
+    assert result.exit_code == 0
+    assert "Removed" in result.output
+
+
+def test_setup_codex_project_creates_config_toml(env_home, tmp_path, monkeypatch):
+    """Test that --project installs both AGENTS.md and config.toml."""
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "codex", "--project"])
+
+    assert result.exit_code == 0
+    codex_dir = tmp_path / ".codex"
+    assert (codex_dir / "AGENTS.md").exists()
+    assert (codex_dir / "config.toml").exists()
+
+
+def test_setup_help_shows_opencode(env_home):
+    """Test that memory setup --help lists opencode subcommand."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "--help"])
+
+    assert result.exit_code == 0
+    assert "opencode" in result.output
+
+
 def test_mcp_command_exists():
     """Test that the mcp command is registered."""
     from click.testing import CliRunner

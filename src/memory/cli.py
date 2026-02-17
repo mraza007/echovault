@@ -399,7 +399,7 @@ def setup_claude_code_cmd(config_dir, project):
     from memory.setup import setup_claude_code
 
     target = _resolve_config_dir(".claude", config_dir, project)
-    result = setup_claude_code(target)
+    result = setup_claude_code(target, project=project)
     click.echo(result["message"])
 
 
@@ -419,11 +419,21 @@ def setup_cursor_cmd(config_dir, project):
 @click.option("--config-dir", default=None, help="Path to .codex directory")
 @click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
 def setup_codex_cmd(config_dir, project):
-    """Install EchoVault section into Codex AGENTS.md."""
+    """Install EchoVault section into Codex AGENTS.md and config.toml."""
     from memory.setup import setup_codex
 
     target = _resolve_config_dir(".codex", config_dir, project)
     result = setup_codex(target)
+    click.echo(result["message"])
+
+
+@setup.command("opencode")
+@click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
+def setup_opencode_cmd(project):
+    """Install EchoVault MCP server into OpenCode."""
+    from memory.setup import setup_opencode
+
+    result = setup_opencode(project=project)
     click.echo(result["message"])
 
 
@@ -441,7 +451,7 @@ def uninstall_claude_code_cmd(config_dir, project):
     from memory.setup import uninstall_claude_code
 
     target = _resolve_config_dir(".claude", config_dir, project)
-    result = uninstall_claude_code(target)
+    result = uninstall_claude_code(target, project=project)
     click.echo(result["message"])
 
 
@@ -461,11 +471,21 @@ def uninstall_cursor_cmd(config_dir, project):
 @click.option("--config-dir", default=None, help="Path to .codex directory")
 @click.option("--project", is_flag=True, default=False, help="Uninstall from current project instead of globally")
 def uninstall_codex_cmd(config_dir, project):
-    """Remove EchoVault section from Codex AGENTS.md."""
+    """Remove EchoVault from Codex AGENTS.md and config.toml."""
     from memory.setup import uninstall_codex
 
     target = _resolve_config_dir(".codex", config_dir, project)
     result = uninstall_codex(target)
+    click.echo(result["message"])
+
+
+@uninstall.command("opencode")
+@click.option("--project", is_flag=True, default=False, help="Uninstall from current project instead of globally")
+def uninstall_opencode_cmd(project):
+    """Remove EchoVault from OpenCode."""
+    from memory.setup import uninstall_opencode
+
+    result = uninstall_opencode(project=project)
     click.echo(result["message"])
 
 

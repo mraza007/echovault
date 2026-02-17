@@ -3,8 +3,13 @@
 import json
 import os
 import shutil
+import sys
 from typing import Any
 
+
+# ---------------------------------------------------------------------------
+# JSON helpers
+# ---------------------------------------------------------------------------
 
 def _read_json(path: str) -> dict:
     """Read a JSON file, returning empty dict if missing or empty."""
@@ -23,11 +28,225 @@ def _write_json(path: str, data: dict) -> None:
         f.write("\n")
 
 
+# ---------------------------------------------------------------------------
+# TOML helpers
+# ---------------------------------------------------------------------------
+
+def _read_toml(path: str) -> dict:
+    """Read a TOML file, returning empty dict if missing or empty."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        return {}
+    if not data.strip():
+        return {}
+    if sys.version_info >= (3, 11):
+        import tomllib
+        return tomllib.loads(data.decode())
+    else:
+        import tomli
+        return tomli.loads(data.decode())
+
+
+def _write_toml(path: str, data: dict) -> None:
+    """Write a dict as TOML.
+
+    Only supports the subset we need: top-level key/value pairs and
+    one level of nested tables with string/list-of-string values.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines: list[str] = []
+
+    # Write top-level scalar keys first
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            lines.append(f"{key} = {_toml_value(value)}")
+
+    # Write tables
+    for key, value in data.items():
+        if isinstance(value, dict):
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(f"[{key}]")
+            for k, v in value.items():
+                if isinstance(v, dict):
+                    lines.append("")
+                    lines.append(f"[{key}.{k}]")
+                    for kk, vv in v.items():
+                        lines.append(f"{kk} = {_toml_value(vv)}")
+                else:
+                    lines.append(f"{k} = {_toml_value(v)}")
+
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _toml_value(v: object) -> str:
+    """Format a Python value as a TOML literal."""
+    if isinstance(v, str):
+        return f'"{v}"'
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        items = ", ".join(_toml_value(i) for i in v)
+        return f"[{items}]"
+    return f'"{v}"'
+
+
+# ---------------------------------------------------------------------------
+# Shared MCP install/uninstall helpers
+# ---------------------------------------------------------------------------
+
 MCP_CONFIG = {
     "command": "memory",
     "args": ["mcp"],
     "type": "stdio",
 }
+
+OPENCODE_MCP_CONFIG = {
+    "type": "local",
+    "command": ["memory", "mcp"],
+}
+
+
+def _install_mcp_servers(path: str) -> bool:
+    """Install echovault into a JSON file under the ``mcpServers`` key.
+
+    Used by Claude Code and Cursor.  Returns True if the entry was added.
+    """
+    data = _read_json(path)
+    servers = data.setdefault("mcpServers", {})
+    if "echovault" in servers:
+        return False
+    servers["echovault"] = MCP_CONFIG
+    _write_json(path, data)
+    return True
+
+
+def _uninstall_mcp_servers(path: str) -> bool:
+    """Remove echovault from a JSON ``mcpServers`` key.  Returns True if removed."""
+    if not os.path.exists(path):
+        return False
+    data = _read_json(path)
+    servers = data.get("mcpServers", {})
+    if "echovault" not in servers:
+        return False
+    del servers["echovault"]
+    if not servers:
+        del data["mcpServers"]
+    if data:
+        _write_json(path, data)
+    else:
+        os.remove(path)
+    return True
+
+
+def _install_toml_mcp(path: str) -> bool:
+    """Install echovault into a TOML ``[mcp_servers.echovault]`` table.
+
+    Used by Codex.  Returns True if the entry was added.
+    If the existing file can't be parsed (e.g. Codex writes non-standard
+    TOML keys), falls back to appending the section directly.
+    """
+    try:
+        data = _read_toml(path)
+    except Exception:
+        # File exists but has non-standard TOML — append directly
+        return _append_toml_mcp_section(path)
+
+    servers = data.setdefault("mcp_servers", {})
+    if "echovault" in servers:
+        return False
+    servers["echovault"] = {"command": "memory", "args": ["mcp"]}
+    _write_toml(path, data)
+    return True
+
+
+def _append_toml_mcp_section(path: str) -> bool:
+    """Append [mcp_servers.echovault] to a TOML file without parsing it."""
+    try:
+        with open(path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+
+    if "mcp_servers.echovault" in content:
+        return False
+
+    section = '\n[mcp_servers.echovault]\ncommand = "memory"\nargs = ["mcp"]\n'
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(section)
+    return True
+
+
+def _uninstall_toml_mcp(path: str) -> bool:
+    """Remove echovault from a TOML ``[mcp_servers]`` table.  Returns True if removed."""
+    import re
+
+    if not os.path.exists(path):
+        return False
+
+    try:
+        data = _read_toml(path)
+        servers = data.get("mcp_servers", {})
+        if "echovault" not in servers:
+            return False
+        del servers["echovault"]
+        if not servers:
+            del data["mcp_servers"]
+        _write_toml(path, data)
+        return True
+    except Exception:
+        # Non-standard TOML — use regex removal
+        with open(path) as f:
+            content = f.read()
+        if "mcp_servers.echovault" not in content:
+            return False
+        cleaned = re.sub(
+            r"\n*\[mcp_servers\.echovault\]\n(?:(?!\[)[^\n]*\n?)*",
+            "",
+            content,
+        )
+        with open(path, "w") as f:
+            f.write(cleaned)
+        return True
+
+
+def _install_opencode_mcp(path: str) -> bool:
+    """Install echovault into a JSON ``mcp`` key with OpenCode schema.
+
+    Returns True if the entry was added.
+    """
+    data = _read_json(path)
+    mcp = data.setdefault("mcp", {})
+    if "echovault" in mcp:
+        return False
+    mcp["echovault"] = OPENCODE_MCP_CONFIG
+    _write_json(path, data)
+    return True
+
+
+def _uninstall_opencode_mcp(path: str) -> bool:
+    """Remove echovault from a JSON ``mcp`` key.  Returns True if removed."""
+    if not os.path.exists(path):
+        return False
+    data = _read_json(path)
+    mcp = data.get("mcp", {})
+    if "echovault" not in mcp:
+        return False
+    del mcp["echovault"]
+    if not mcp:
+        del data["mcp"]
+    if data:
+        _write_json(path, data)
+    else:
+        os.remove(path)
+    return True
 
 
 def _remove_old_hooks(settings: dict) -> list[str]:
@@ -113,6 +332,9 @@ def _uninstall_skill(agent_home: str) -> bool:
         True if skill was removed, False if not found.
     """
     skill_dir = os.path.join(agent_home, "skills", "echovault")
+    if os.path.islink(skill_dir):
+        os.remove(skill_dir)
+        return True
     if os.path.exists(skill_dir):
         shutil.rmtree(skill_dir)
         return True
@@ -212,8 +434,20 @@ memory delete <id>  # remove a memory
 """
 
 
-def setup_claude_code(claude_home: str) -> dict[str, str]:
-    """Install EchoVault MCP server into Claude Code .mcp.json."""
+def _get_claude_mcp_path(claude_home: str, project: bool) -> str:
+    """Return the correct MCP config path for Claude Code.
+
+    Project scope: <project_root>/.mcp.json
+    Global scope:  ~/.claude.json
+    """
+    if project:
+        project_root = os.path.dirname(claude_home)
+        return os.path.join(project_root, ".mcp.json")
+    return os.path.join(os.path.expanduser("~"), ".claude.json")
+
+
+def setup_claude_code(claude_home: str, *, project: bool = False) -> dict[str, str]:
+    """Install EchoVault MCP server into Claude Code."""
     installed = []
 
     # Clean old hooks from settings.json if present
@@ -223,7 +457,7 @@ def setup_claude_code(claude_home: str) -> dict[str, str]:
         removed = _remove_old_hooks(settings)
         if removed:
             installed.append(f"removed old hooks: {', '.join(removed)}")
-        # Remove mcpServers from settings.json (moved to .mcp.json)
+        # Remove mcpServers from settings.json (moved to dedicated config)
         if "mcpServers" in settings and "echovault" in settings["mcpServers"]:
             del settings["mcpServers"]["echovault"]
             if not settings["mcpServers"]:
@@ -234,15 +468,11 @@ def setup_claude_code(claude_home: str) -> dict[str, str]:
     # Remove old skill if present
     _uninstall_skill(claude_home)
 
-    # Add MCP server config to .mcp.json (project root)
-    project_root = os.path.dirname(claude_home)
-    mcp_path = os.path.join(project_root, ".mcp.json")
-    data = _read_json(mcp_path)
-    mcp_servers = data.setdefault("mcpServers", {})
-    if "echovault" not in mcp_servers:
-        mcp_servers["echovault"] = MCP_CONFIG
-        installed.append("mcpServers in .mcp.json")
-    _write_json(mcp_path, data)
+    # Add MCP server config
+    mcp_path = _get_claude_mcp_path(claude_home, project)
+    if _install_mcp_servers(mcp_path):
+        scope = ".mcp.json" if project else "~/.claude.json"
+        installed.append(f"mcpServers in {scope}")
 
     if installed:
         return {"status": "ok", "message": f"Installed: {', '.join(installed)}"}
@@ -251,9 +481,6 @@ def setup_claude_code(claude_home: str) -> dict[str, str]:
 
 def setup_cursor(cursor_home: str) -> dict[str, str]:
     """Install EchoVault MCP server into Cursor mcp.json."""
-    mcp_path = os.path.join(cursor_home, "mcp.json")
-    data = _read_json(mcp_path)
-
     installed = []
 
     # Remove old hooks if present
@@ -276,12 +503,9 @@ def setup_cursor(cursor_home: str) -> dict[str, str]:
     _uninstall_skill(cursor_home)
 
     # Add MCP server config
-    mcp_servers = data.setdefault("mcpServers", {})
-    if "echovault" not in mcp_servers:
-        mcp_servers["echovault"] = MCP_CONFIG
+    mcp_path = os.path.join(cursor_home, "mcp.json")
+    if _install_mcp_servers(mcp_path):
         installed.append("mcpServers")
-
-    _write_json(mcp_path, data)
 
     if installed:
         return {"status": "ok", "message": f"Installed: {', '.join(installed)}"}
@@ -342,10 +566,10 @@ Categories: `decision`, `bug`, `pattern`, `learning`, `context`.
 
 
 def setup_codex(codex_home: str) -> dict[str, str]:
-    """Install EchoVault instructions into Codex AGENTS.md.
+    """Install EchoVault into Codex (AGENTS.md + MCP config).
 
-    Codex lacks a hook system, so we append memory instructions
-    to the global AGENTS.md file.
+    Writes memory instructions to AGENTS.md as a fallback and installs
+    ``[mcp_servers.echovault]`` into config.toml for native MCP support.
 
     Args:
         codex_home: Path to the .codex directory (e.g. ~/.codex).
@@ -353,8 +577,10 @@ def setup_codex(codex_home: str) -> dict[str, str]:
     Returns:
         Dict with 'status' and 'message' keys.
     """
-    agents_path = os.path.join(codex_home, "AGENTS.md")
+    installed = []
 
+    # AGENTS.md (fallback for agents that don't use MCP tools)
+    agents_path = os.path.join(codex_home, "AGENTS.md")
     existing = ""
     try:
         with open(agents_path) as f:
@@ -362,48 +588,42 @@ def setup_codex(codex_home: str) -> dict[str, str]:
     except FileNotFoundError:
         pass
 
-    if "## EchoVault" in existing:
-        return {"status": "ok", "message": "AGENTS.md already contains EchoVault section"}
+    if "## EchoVault" not in existing:
+        os.makedirs(os.path.dirname(agents_path), exist_ok=True)
+        with open(agents_path, "w") as f:
+            f.write(existing.rstrip("\n") + "\n" + CODEX_AGENTS_MD_SECTION)
+        installed.append("AGENTS.md")
 
-    os.makedirs(os.path.dirname(agents_path), exist_ok=True)
-    with open(agents_path, "w") as f:
-        f.write(existing.rstrip("\n") + "\n" + CODEX_AGENTS_MD_SECTION)
+    # MCP config in config.toml
+    toml_path = os.path.join(codex_home, "config.toml")
+    if _install_toml_mcp(toml_path):
+        installed.append("config.toml")
 
-    installed = ["AGENTS.md"]
-    skill_installed = _install_skill(codex_home)
-    if skill_installed:
+    # Skill (legacy)
+    if _install_skill(codex_home):
         installed.append("skill")
+
+    if not installed:
+        return {"status": "ok", "message": "Already installed"}
 
     msg = f"Installed: {', '.join(installed)}"
     msg += "\nNote: Auto-persist (Stop hook) is only available for Claude Code. Codex relies on AGENTS.md instructions for saving."
     return {"status": "ok", "message": msg}
 
 
-def uninstall_claude_code(claude_home: str) -> dict[str, str]:
-    """Remove EchoVault from Claude Code (.mcp.json + settings.json cleanup)."""
+def uninstall_claude_code(claude_home: str, *, project: bool = False) -> dict[str, str]:
+    """Remove EchoVault from Claude Code."""
     removed = []
 
-    # Remove MCP config from .mcp.json
-    project_root = os.path.dirname(claude_home)
-    mcp_path = os.path.join(project_root, ".mcp.json")
-    if os.path.exists(mcp_path):
-        data = _read_json(mcp_path)
-        mcp_servers = data.get("mcpServers", {})
-        if "echovault" in mcp_servers:
-            del mcp_servers["echovault"]
-            removed.append("mcpServers")
-            if not mcp_servers:
-                del data["mcpServers"]
-        if data:
-            _write_json(mcp_path, data)
-        else:
-            os.remove(mcp_path)
+    # Remove from the target scope
+    mcp_path = _get_claude_mcp_path(claude_home, project)
+    if _uninstall_mcp_servers(mcp_path):
+        removed.append(f"mcpServers from {os.path.basename(mcp_path)}")
 
-    # Clean old hooks/config from settings.json
+    # Also clean legacy locations
     settings_path = os.path.join(claude_home, "settings.json")
     if os.path.exists(settings_path):
         settings = _read_json(settings_path)
-        # Remove legacy mcpServers from settings.json
         if "mcpServers" in settings and "echovault" in settings["mcpServers"]:
             del settings["mcpServers"]["echovault"]
             if not settings["mcpServers"]:
@@ -424,17 +644,11 @@ def uninstall_claude_code(claude_home: str) -> dict[str, str]:
 
 def uninstall_cursor(cursor_home: str) -> dict[str, str]:
     """Remove EchoVault from Cursor (MCP config + old hooks)."""
-    mcp_path = os.path.join(cursor_home, "mcp.json")
-    data = _read_json(mcp_path)
-
     removed = []
 
-    mcp_servers = data.get("mcpServers", {})
-    if "echovault" in mcp_servers:
-        del mcp_servers["echovault"]
+    mcp_path = os.path.join(cursor_home, "mcp.json")
+    if _uninstall_mcp_servers(mcp_path):
         removed.append("mcpServers")
-        if not mcp_servers and "mcpServers" in data:
-            del data["mcpServers"]
 
     # Remove old hooks
     old_hooks_path = os.path.join(cursor_home, "hooks.json")
@@ -456,39 +670,76 @@ def uninstall_cursor(cursor_home: str) -> dict[str, str]:
         removed.append("skill")
 
     if removed:
-        _write_json(mcp_path, data)
         return {"status": "ok", "message": f"Removed: {', '.join(removed)}"}
     return {"status": "ok", "message": "Nothing to remove"}
 
 
 def uninstall_codex(codex_home: str) -> dict[str, str]:
-    """Remove EchoVault section from Codex AGENTS.md."""
+    """Remove EchoVault from Codex (AGENTS.md + config.toml)."""
     import re
 
-    agents_path = os.path.join(codex_home, "AGENTS.md")
+    removed = []
 
+    # Remove AGENTS.md section
+    agents_path = os.path.join(codex_home, "AGENTS.md")
     try:
         with open(agents_path) as f:
             content = f.read()
     except FileNotFoundError:
-        return {"status": "ok", "message": "No AGENTS.md found"}
+        content = ""
 
-    if "## EchoVault" not in content:
-        return {"status": "ok", "message": "No EchoVault section found"}
+    if "## EchoVault" in content:
+        cleaned = re.sub(
+            r"\n*## EchoVault[^\n]*\n.*?(?=\n## |\Z)",
+            "",
+            content,
+            flags=re.DOTALL,
+        )
+        with open(agents_path, "w") as f:
+            f.write(cleaned.strip() + "\n")
+        removed.append("AGENTS.md")
 
-    cleaned = re.sub(
-        r"\n*## EchoVault[^\n]*\n.*?(?=\n## |\Z)",
-        "",
-        content,
-        flags=re.DOTALL,
-    )
+    # Remove config.toml MCP entry
+    toml_path = os.path.join(codex_home, "config.toml")
+    if _uninstall_toml_mcp(toml_path):
+        removed.append("config.toml")
 
-    with open(agents_path, "w") as f:
-        f.write(cleaned.strip() + "\n")
-
-    removed = ["AGENTS.md"]
-    skill_removed = _uninstall_skill(codex_home)
-    if skill_removed:
+    if _uninstall_skill(codex_home):
         removed.append("skill")
 
-    return {"status": "ok", "message": f"Removed: {', '.join(removed)}"}
+    if removed:
+        return {"status": "ok", "message": f"Removed: {', '.join(removed)}"}
+    return {"status": "ok", "message": "Nothing to remove"}
+
+
+# ---------------------------------------------------------------------------
+# OpenCode
+# ---------------------------------------------------------------------------
+
+def _get_opencode_mcp_path(project: bool) -> str:
+    """Return the correct MCP config path for OpenCode.
+
+    Project scope: <cwd>/opencode.json
+    Global scope:  ~/.config/opencode/opencode.json
+    """
+    if project:
+        return os.path.join(os.getcwd(), "opencode.json")
+    return os.path.join(os.path.expanduser("~"), ".config", "opencode", "opencode.json")
+
+
+def setup_opencode(*, project: bool = False) -> dict[str, str]:
+    """Install EchoVault MCP server into OpenCode."""
+    mcp_path = _get_opencode_mcp_path(project)
+    if _install_opencode_mcp(mcp_path):
+        scope = "opencode.json" if project else "~/.config/opencode/opencode.json"
+        return {"status": "ok", "message": f"Installed: mcp in {scope}"}
+    return {"status": "ok", "message": "Already installed"}
+
+
+def uninstall_opencode(*, project: bool = False) -> dict[str, str]:
+    """Remove EchoVault from OpenCode."""
+    mcp_path = _get_opencode_mcp_path(project)
+    if _uninstall_opencode_mcp(mcp_path):
+        scope = "opencode.json" if project else "~/.config/opencode/opencode.json"
+        return {"status": "ok", "message": f"Removed: mcp from {scope}"}
+    return {"status": "ok", "message": "Nothing to remove"}
