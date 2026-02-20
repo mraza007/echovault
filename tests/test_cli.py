@@ -106,6 +106,111 @@ def test_save_with_all_fields(env_home):
     assert "Saved: Complete Memory (id:" in result.output
 
 
+def test_save_with_details_template(env_home):
+    """Test that --details-template scaffolds details when none provided."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "save",
+            "--title", "Template Memory",
+            "--what", "Testing details template",
+            "--details-template",
+            "--project", "test-project",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Extract saved memory ID from output
+    saved_line = [line for line in result.output.split("\n") if line.startswith("Saved:")][0]
+    memory_id = saved_line.split("id: ")[1].split(")")[0]
+
+    service = MemoryService(memory_home=str(env_home))
+    detail = service.get_details(memory_id)
+    service.close()
+
+    assert detail is not None
+    assert "Context:" in detail.body
+    assert "Options considered:" in detail.body
+    assert "Decision:" in detail.body
+    assert "Tradeoffs:" in detail.body
+    assert "Follow-up:" in detail.body
+
+
+def test_save_with_details_file(env_home, tmp_path):
+    """Test that --details-file loads details from a file."""
+    details_file = tmp_path / "details.txt"
+    details_file.write_text(
+        "Context:\nLoaded from file.\n\nOptions considered:\n- Use file input\n\nDecision:\nUse --details-file.\n\nTradeoffs:\nNeed file management.\n\nFollow-up:\nNone."
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "save",
+            "--title", "File Details Memory",
+            "--what", "Testing details file",
+            "--details-file", str(details_file),
+            "--project", "test-project",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    saved_line = [line for line in result.output.split("\n") if line.startswith("Saved:")][0]
+    memory_id = saved_line.split("id: ")[1].split(")")[0]
+
+    service = MemoryService(memory_home=str(env_home))
+    detail = service.get_details(memory_id)
+    service.close()
+
+    assert detail is not None
+    assert "Loaded from file." in detail.body
+    assert "Use --details-file." in detail.body
+
+
+def test_save_rejects_details_and_details_file_together(env_home, tmp_path):
+    """Test that --details and --details-file cannot be used together."""
+    details_file = tmp_path / "details.txt"
+    details_file.write_text("details from file")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "save",
+            "--title", "Conflicting Details Input",
+            "--what", "This should fail",
+            "--details", "inline details",
+            "--details-file", str(details_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --details or --details-file" in result.output
+
+
+def test_save_shows_details_warnings(env_home):
+    """Test that save prints quality warnings for low-signal details."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "save",
+            "--title", "Warning Memory",
+            "--what", "Testing warning output",
+            "--category", "decision",
+            "--project", "test-project",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Warning:" in result.output
+    assert "should include details" in result.output
+
+
 def test_save_missing_required_field_fails(env_home):
     """Test that memory save without required fields fails."""
     runner = CliRunner()

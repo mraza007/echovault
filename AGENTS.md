@@ -26,9 +26,15 @@ memory save \
   --category "decision" \
   --related-files "src/auth.ts,src/middleware.ts" \
   --source "codex" \
-  --details "Full context with all important details. Be thorough.
-             Include alternatives considered, tradeoffs, config values,
-             and anything someone would need to understand this fully later."
+  --details "Context:
+
+             Options considered:
+             - Option A
+             - Option B
+
+             Decision:
+             Tradeoffs:
+             Follow-up:"
 ```
 
 Categories: `decision`, `pattern`, `bug`, `context`, `learning`

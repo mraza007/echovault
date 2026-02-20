@@ -143,9 +143,51 @@ class MemoryService:
             self._vectors_available = False
             return False
 
+    def _details_warnings(self, raw: RawMemoryInput) -> list[str]:
+        """Return quality warnings for memory details."""
+        warnings: list[str] = []
+
+        details = (raw.details or "").strip()
+        category = (raw.category or "").strip().lower()
+
+        if category in {"decision", "bug"} and not details:
+            warnings.append(
+                f"'{category}' memories should include details. "
+                "Capture context, options considered, decision, tradeoffs, and follow-up."
+            )
+            return warnings
+
+        if not details:
+            return warnings
+
+        min_chars = 120
+        if len(details) < min_chars:
+            warnings.append(
+                f"Details are brief ({len(details)} chars). "
+                f"Aim for at least {min_chars} chars for future-session context."
+            )
+
+        required_sections = [
+            "context",
+            "options considered",
+            "decision",
+            "tradeoffs",
+            "follow-up",
+        ]
+        details_lc = details.lower()
+        missing = [section for section in required_sections if section not in details_lc]
+        if missing:
+            warnings.append(
+                "Details are missing recommended sections: "
+                + ", ".join(missing)
+                + "."
+            )
+
+        return warnings
+
     def save(
         self, raw: RawMemoryInput, project: Optional[str] = None
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         """Save a memory with full pipeline: redact, write markdown, index, embed.
 
         Args:
@@ -162,6 +204,8 @@ class MemoryService:
 
         # Ensure project directory exists
         os.makedirs(vault_project_dir, exist_ok=True)
+
+        warnings = self._details_warnings(raw)
 
         # Redact all text fields
         raw.what = redact(raw.what, self.ignore_patterns)
@@ -230,7 +274,12 @@ class MemoryService:
                 except Exception:
                     pass
 
-                return {"id": existing_id, "file_path": existing_file_path, "action": "updated"}
+                return {
+                    "id": existing_id,
+                    "file_path": existing_file_path,
+                    "action": "updated",
+                    "warnings": warnings,
+                }
 
         # --- Normal save path: create new memory ---
         # Create memory object with generated metadata
@@ -263,7 +312,7 @@ class MemoryService:
                 file=sys.stderr,
             )
 
-        return {"id": mem.id, "file_path": file_path, "action": "created"}
+        return {"id": mem.id, "file_path": file_path, "action": "created", "warnings": warnings}
 
     def search(
         self,

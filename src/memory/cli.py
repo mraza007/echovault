@@ -15,6 +15,20 @@ from memory.config import get_memory_home, load_config
 from memory.core import MemoryService
 from memory.models import RawMemoryInput
 
+DETAILS_TEMPLATE = """\
+Context:
+
+Options considered:
+- Option A:
+- Option B:
+
+Decision:
+
+Tradeoffs:
+
+Follow-up:
+"""
+
 
 def _redact_api_keys(data: dict) -> dict:
     for section in ("embedding",):
@@ -104,13 +118,42 @@ def config_init(force):
 )
 @click.option("--related-files", default="", help="Comma-separated file paths")
 @click.option("--details", default=None, help="Extended details or context")
+@click.option("--details-file", default=None, help="Path to a file containing extended details")
+@click.option("--details-template", is_flag=True, default=False, help="Use a structured details template")
 @click.option("--source", default=None, help="Source of the memory")
 @click.option("--project", default=None, help="Project name")
-def save(title, what, why, impact, tags, category, related_files, details, source, project):
+def save(
+    title,
+    what,
+    why,
+    impact,
+    tags,
+    category,
+    related_files,
+    details,
+    details_file,
+    details_template,
+    source,
+    project,
+):
     """Save a memory to the current session."""
     project = project or os.path.basename(os.getcwd())
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     file_list = [f.strip() for f in related_files.split(",") if f.strip()] if related_files else []
+
+    if details and details_file:
+        raise click.UsageError("Use either --details or --details-file, not both.")
+
+    resolved_details = details
+    if details_file:
+        try:
+            with open(details_file) as f:
+                resolved_details = f.read()
+        except OSError as e:
+            raise click.ClickException(f"Failed to read details file '{details_file}': {e}") from e
+
+    if details_template and not (resolved_details or "").strip():
+        resolved_details = DETAILS_TEMPLATE
 
     raw = RawMemoryInput(
         title=title,
@@ -120,7 +163,7 @@ def save(title, what, why, impact, tags, category, related_files, details, sourc
         tags=tag_list,
         category=category,
         related_files=file_list,
-        details=details,
+        details=resolved_details,
         source=source,
     )
 
@@ -130,6 +173,8 @@ def save(title, what, why, impact, tags, category, related_files, details, sourc
 
     click.echo(f"Saved: {title} (id: {result['id']})")
     click.echo(f"File: {result['file_path']}")
+    for warning in result.get("warnings", []):
+        click.echo(f"Warning: {warning}")
 
 
 @main.command()

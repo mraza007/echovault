@@ -50,6 +50,15 @@ def seeded_service(service):
 
 
 class TestMemorySaveTool:
+    def test_save_description_recommends_structured_details(self):
+        from memory.mcp_server import SAVE_DESCRIPTION
+
+        assert "Context" in SAVE_DESCRIPTION
+        assert "Options considered" in SAVE_DESCRIPTION
+        assert "Decision" in SAVE_DESCRIPTION
+        assert "Tradeoffs" in SAVE_DESCRIPTION
+        assert "Follow-up" in SAVE_DESCRIPTION
+
     def test_save_creates_memory(self, service):
         from memory.mcp_server import handle_memory_save
 

@@ -25,6 +25,14 @@ Save when you:
 - The user corrected you or clarified a requirement
 
 Do NOT save: trivial changes (typos, formatting), info obvious from reading the code, or duplicates of existing memories. Write for a future agent with zero context."""
+SAVE_DESCRIPTION += """
+
+When filling `details`, prefer this structure:
+- Context
+- Options considered
+- Decision
+- Tradeoffs
+- Follow-up"""
 
 SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Returns matching memories ranked by relevance. You MUST call this at session start before doing any work, and whenever the user's request relates to a topic that may have prior context."""
 
@@ -176,7 +184,13 @@ def _create_server(service: MemoryService) -> Server:
                             "description": "decision: chose X over Y. bug: fixed a problem. pattern: reusable gotcha. learning: non-obvious discovery. context: project setup/architecture.",
                         },
                         "related_files": {"type": "array", "items": {"type": "string"}, "description": "File paths involved."},
-                        "details": {"type": "string", "description": "Full context for a future agent with zero context."},
+                        "details": {
+                            "type": "string",
+                            "description": (
+                                "Full context for a future agent with zero context. "
+                                "Prefer: Context, Options considered, Decision, Tradeoffs, Follow-up."
+                            ),
+                        },
                         "project": {"type": "string", "description": "Project name. Auto-detected from cwd if omitted."},
                     },
                     "required": ["title", "what"],

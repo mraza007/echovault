@@ -43,9 +43,15 @@ memory save \
   --category "<category>" \
   --related-files "path/to/file1,path/to/file2" \
   --source "claude-code" \
-  --details "Full context with all important details. Be thorough.
-             Include alternatives considered, tradeoffs, config values,
-             and anything someone would need to understand this fully later."
+  --details "Context:
+
+             Options considered:
+             - Option A
+             - Option B
+
+             Decision:
+             Tradeoffs:
+             Follow-up:"
 ```
 
 Categories: `decision`, `bug`, `pattern`, `setup`, `learning`, `context`.

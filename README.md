@@ -111,12 +111,21 @@ memory save --title "Switched to JWT auth" \
   --what "Replaced session cookies with JWT" \
   --why "Needed stateless auth for API" \
   --impact "All endpoints now require Bearer token" \
-  --tags "auth,jwt" --category "decision"
+  --tags "auth,jwt" --category "decision" \
+  --details "Context:
+Options considered:
+- Keep session cookies
+- Move to JWT
+Decision:
+Tradeoffs:
+Follow-up:"
 
 memory search "authentication"
 memory details <id>
 memory context --project
 ```
+
+For long details, use `--details-file notes.md`. To scaffold structured details automatically, use `--details-template`.
 
 ## How it works
 
@@ -152,7 +161,7 @@ All agents share the same memory vault at `~/.memory/`. A memory saved by Claude
 | `memory init` | Create `~/.memory` vault |
 | `memory setup <agent>` | Install MCP server config for an agent |
 | `memory uninstall <agent>` | Remove MCP server config for an agent |
-| `memory save ...` | Save a memory |
+| `memory save ...` | Save a memory (`--details-file` and `--details-template` supported) |
 | `memory search "query"` | Hybrid FTS + semantic search |
 | `memory details <id>` | Full details for a memory |
 | `memory delete <id>` | Delete a memory by ID or prefix |

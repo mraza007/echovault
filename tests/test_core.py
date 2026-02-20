@@ -92,6 +92,101 @@ def test_save_with_details_stores_details(env_home):
     service.close()
 
 
+def test_save_warns_when_decision_has_no_details(env_home):
+    """Test that decision memories without details return guidance warnings."""
+    service = MemoryService(memory_home=str(env_home))
+
+    raw = RawMemoryInput(
+        title="Decision without details",
+        what="Switched auth strategy",
+        category="decision",
+    )
+
+    result = service.save(raw, project="test-project")
+
+    warnings = result.get("warnings", [])
+    assert len(warnings) >= 1
+    assert "should include details" in warnings[0]
+
+    service.close()
+
+
+def test_save_warns_when_details_are_too_short(env_home):
+    """Test that short details trigger a warning."""
+    service = MemoryService(memory_home=str(env_home))
+
+    raw = RawMemoryInput(
+        title="Short details memory",
+        what="Made an update",
+        details="Too short",
+        category="context",
+    )
+
+    result = service.save(raw, project="test-project")
+
+    warnings = result.get("warnings", [])
+    assert any("Details are brief" in w for w in warnings)
+
+    service.close()
+
+
+def test_save_warns_when_details_missing_sections(env_home):
+    """Test that unstructured details warn about missing recommended sections."""
+    service = MemoryService(memory_home=str(env_home))
+
+    raw = RawMemoryInput(
+        title="Unstructured details memory",
+        what="Updated deployment flow",
+        details=(
+            "This was a major update to deployment and rollback behavior. "
+            "It changed defaults and required updates to scripts and docs."
+        ),
+        category="context",
+    )
+
+    result = service.save(raw, project="test-project")
+
+    warnings = result.get("warnings", [])
+    assert any("missing recommended sections" in w for w in warnings)
+
+    service.close()
+
+
+def test_save_no_warnings_for_structured_details(env_home):
+    """Test that structured and sufficiently long details avoid warnings."""
+    service = MemoryService(memory_home=str(env_home))
+
+    structured_details = """Context:
+Authentication setup had drifted between API and mobile clients, causing token mismatches and inconsistent refresh handling across environments.
+
+Options considered:
+- Keep mixed session+token flow and patch edge cases.
+- Move everything to JWT with consistent issuer/audience and refresh semantics.
+
+Decision:
+Standardized on JWT for all clients with explicit refresh token rotation rules and environment-specific validation settings.
+
+Tradeoffs:
+Requires migration work and temporary compatibility shims, but removes repeated session bugs and simplifies API contracts.
+
+Follow-up:
+Add migration notes, monitor auth failures for one week, and remove compatibility code after rollout.
+"""
+    raw = RawMemoryInput(
+        title="Structured details memory",
+        what="Standardized authentication flow",
+        details=structured_details,
+        category="decision",
+    )
+
+    result = service.save(raw, project="test-project")
+
+    warnings = result.get("warnings", [])
+    assert warnings == []
+
+    service.close()
+
+
 def test_save_redacts_secrets(env_home):
     """Test that save redacts secrets (sk_live_ in what field is replaced)."""
     service = MemoryService(memory_home=str(env_home))
