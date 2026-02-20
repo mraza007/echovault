@@ -8,8 +8,12 @@ import yaml
 from memory.config import (
     EmbeddingConfig,
     MemoryConfig,
+    clear_persisted_memory_home,
     get_memory_home,
+    get_persisted_memory_home,
     load_config,
+    resolve_memory_home,
+    set_persisted_memory_home,
 )
 
 
@@ -126,3 +130,43 @@ def test_get_memory_home_respects_env_var():
             os.environ["MEMORY_HOME"] = old_value
         else:
             del os.environ["MEMORY_HOME"]
+
+
+def test_get_memory_home_respects_persisted_config(monkeypatch, tmp_path):
+    """Test that persisted config is used when MEMORY_HOME is unset."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_HOME", raising=False)
+
+    target = tmp_path / "custom-memory-home"
+    set_persisted_memory_home(str(target))
+
+    assert get_persisted_memory_home() == str(target.resolve())
+    assert get_memory_home() == str(target.resolve())
+
+
+def test_resolve_memory_home_env_has_priority(monkeypatch, tmp_path):
+    """Test that MEMORY_HOME takes priority over persisted config."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    persisted = tmp_path / "persisted-home"
+    set_persisted_memory_home(str(persisted))
+
+    env_path = tmp_path / "env-home"
+    monkeypatch.setenv("MEMORY_HOME", str(env_path))
+
+    resolved, source = resolve_memory_home()
+    assert resolved == str(env_path.resolve())
+    assert source == "env"
+
+
+def test_clear_persisted_memory_home(monkeypatch, tmp_path):
+    """Test clearing persisted memory home removes the setting."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_HOME", raising=False)
+
+    target = tmp_path / "persisted-home"
+    set_persisted_memory_home(str(target))
+    assert get_persisted_memory_home() == str(target.resolve())
+
+    assert clear_persisted_memory_home() is True
+    assert get_persisted_memory_home() is None
+    assert clear_persisted_memory_home() is False

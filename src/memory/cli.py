@@ -11,7 +11,13 @@ import yaml
 
 import click
 
-from memory.config import get_memory_home, load_config
+from memory.config import (
+    clear_persisted_memory_home,
+    get_memory_home,
+    load_config,
+    resolve_memory_home,
+    set_persisted_memory_home,
+)
 from memory.core import MemoryService
 from memory.models import RawMemoryInput
 
@@ -58,11 +64,33 @@ def init():
 def config(ctx):
     """Show or manage configuration."""
     if ctx.invoked_subcommand is None:
-        home = get_memory_home()
+        home, source = resolve_memory_home()
         cfg = load_config(os.path.join(home, "config.yaml"))
         data = _redact_api_keys(asdict(cfg))
         data["memory_home"] = home
+        data["memory_home_source"] = source
         click.echo(yaml.safe_dump(data, sort_keys=False))
+
+
+@config.command("set-home")
+@click.argument("path")
+def config_set_home(path):
+    """Persist memory home location (used when MEMORY_HOME is unset)."""
+    resolved = set_persisted_memory_home(path)
+    os.makedirs(resolved, exist_ok=True)
+    os.makedirs(os.path.join(resolved, "vault"), exist_ok=True)
+    click.echo(f"Persisted memory home: {resolved}")
+    click.echo("Override anytime with MEMORY_HOME.")
+
+
+@config.command("clear-home")
+def config_clear_home():
+    """Remove persisted memory home location from global config."""
+    changed = clear_persisted_memory_home()
+    if changed:
+        click.echo("Cleared persisted memory home setting.")
+    else:
+        click.echo("No persisted memory home setting was found.")
 
 
 _CONFIG_TEMPLATE = """\

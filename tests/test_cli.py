@@ -38,6 +38,48 @@ def test_init_creates_vault_dir(env_home):
     assert os.path.isdir(vault_dir)
 
 
+def test_config_set_home_persists_path(tmp_path, monkeypatch):
+    """Test that config set-home persists and creates the target structure."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_HOME", raising=False)
+
+    target = tmp_path / "memory-store"
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set-home", str(target)])
+
+    assert result.exit_code == 0
+    assert "Persisted memory home:" in result.output
+    assert target.exists()
+    assert (target / "vault").exists()
+
+
+def test_config_clear_home_removes_setting(tmp_path, monkeypatch):
+    """Test that config clear-home removes persisted home setting."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_HOME", raising=False)
+
+    target = tmp_path / "memory-store"
+    runner = CliRunner()
+    set_result = runner.invoke(main, ["config", "set-home", str(target)])
+    assert set_result.exit_code == 0
+
+    clear_result = runner.invoke(main, ["config", "clear-home"])
+    assert clear_result.exit_code == 0
+    assert "Cleared persisted memory home setting." in clear_result.output
+
+
+def test_config_show_includes_memory_home_source(tmp_path, monkeypatch):
+    """Test that `memory config` shows memory_home_source metadata."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_HOME", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config"])
+
+    assert result.exit_code == 0
+    assert "memory_home_source: default" in result.output
+
+
 def test_save_with_required_fields_succeeds(env_home):
     """Test that memory save with required fields succeeds."""
     runner = CliRunner()
