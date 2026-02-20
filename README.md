@@ -104,6 +104,8 @@ Once set up, your agent uses memory via MCP tools:
 
 The MCP tool descriptions instruct agents to save and retrieve automatically. No manual prompting needed in most cases.
 
+**Auto-save hooks (Claude Code)** — Optional hooks that ensure Claude always saves learnings before ending a session. See [docs/auto-save-hooks.md](docs/auto-save-hooks.md) for setup.
+
 You can also use the CLI directly:
 
 ```bash
