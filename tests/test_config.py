@@ -23,7 +23,7 @@ def test_default_config_has_correct_defaults():
 
     assert config.embedding.provider == "ollama"
     assert config.embedding.model == "nomic-embed-text"
-    assert config.embedding.base_url == "http://localhost:11434"
+    assert config.embedding.base_url is None
     assert config.embedding.api_key is None
 
 
@@ -79,7 +79,7 @@ def test_load_config_partial_fields():
 
         assert config.embedding.provider == "ollama"
         assert config.embedding.model == "nomic-embed-text"
-        assert config.embedding.base_url == "http://localhost:11434"
+        assert config.embedding.base_url is None
         assert config.embedding.api_key is None
     finally:
         os.unlink(config_path)

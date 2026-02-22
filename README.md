@@ -77,6 +77,8 @@ This creates `~/.memory/config.yaml` with sensible defaults:
 embedding:
   provider: ollama              # ollama | openai | openrouter
   model: nomic-embed-text
+  # base_url: http://localhost:11434   # for ollama; for openai: https://api.openai.com/v1
+  # api_key: sk-...                    # required for openai / openrouter
 
 enrichment:
   provider: none                # none | ollama | openai | openrouter
@@ -92,7 +94,19 @@ context:
 - **`enrichment`** — Optional LLM step that enhances memories before storing (better summaries, auto-tags). Set to `none` to skip.
 - **`context`** — Controls how memories are retrieved at session start. `auto` uses vector search when embeddings are available, falls back to keywords. `topup_recent` also includes recent memories so the agent has fresh context.
 
-For cloud providers, add `api_key` under the provider section. API keys are redacted in `memory config` output.
+For cloud providers, add `api_key` under the provider section. To use OpenAI-compatible endpoints (proxies/gateways/self-hosted), set `base_url` (for OpenAI: `https://api.openai.com/v1`). API keys are redacted in `memory config` output.
+
+#### Example: on‑prem vLLM (OpenAI-compatible)
+
+If you run an OpenAI-compatible vLLM server on-prem (often served at `/v1`), point `base_url` at it and set `model` to the model name your vLLM instance exposes.
+
+```yaml
+embedding:
+  provider: openai
+  model: <your-vllm-embedding-model>
+  base_url: http://vllm.your-company.internal:8000/v1
+  # api_key: <optional>   # set if your vLLM gateway enforces auth
+```
 
 ### Configure memory location
 

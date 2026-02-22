@@ -112,6 +112,7 @@ class MemoryService:
             return OpenAIEmbedding(
                 model=self.config.embedding.model,
                 api_key=self.config.embedding.api_key,
+                base_url=self.config.embedding.base_url,
             )
         raise ValueError(f"Unknown embedding provider: {provider}")
 

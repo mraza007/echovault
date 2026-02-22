@@ -9,7 +9,7 @@ import yaml
 class EmbeddingConfig:
     provider: str = "ollama"
     model: str = "nomic-embed-text"
-    base_url: Optional[str] = "http://localhost:11434"
+    base_url: Optional[str] = None
     api_key: Optional[str] = None
 
 
@@ -120,7 +120,7 @@ def load_config(path: str) -> MemoryConfig:
         config.embedding = EmbeddingConfig(
             provider=e.get("provider", "ollama"),
             model=e.get("model", "nomic-embed-text"),
-            base_url=e.get("base_url", "http://localhost:11434"),
+            base_url=e.get("base_url"),
             api_key=e.get("api_key"),
         )
     if "context" in data:
