@@ -34,7 +34,7 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 **Zero idle cost** — No background processes, no daemon, no RAM overhead. The MCP server only runs when the agent starts it.
 
-**Hybrid search** — FTS5 keyword search works out of the box. Add Ollama, OpenAI, or OpenRouter for semantic vector search.
+**Hybrid search** — FTS5 keyword search works out of the box. Add Ollama or OpenAI for semantic vector search.
 
 **Secret redaction** — 3-layer redaction strips API keys, passwords, and credentials before anything hits disk. Supports explicit `<redacted>` tags, pattern detection, and custom `.memoryignore` rules.
 
@@ -75,13 +75,13 @@ This creates `~/.memory/config.yaml` with sensible defaults:
 
 ```yaml
 embedding:
-  provider: ollama              # ollama | openai | openrouter
+  provider: ollama              # ollama | openai
   model: nomic-embed-text
   # base_url: http://localhost:11434   # for ollama; for openai: https://api.openai.com/v1
-  # api_key: sk-...                    # required for openai / openrouter
+  # api_key: sk-...                    # required for openai
 
 enrichment:
-  provider: none                # none | ollama | openai | openrouter
+  provider: none                # none | ollama | openai
 
 context:
   semantic: auto                # auto | always | never
@@ -90,7 +90,7 @@ context:
 
 **What each section does:**
 
-- **`embedding`** — How memories get turned into vectors for semantic search. `ollama` runs locally, `openai` and `openrouter` call cloud APIs. `nomic-embed-text` is a good local model for Ollama.
+- **`embedding`** — How memories get turned into vectors for semantic search. `ollama` runs locally, and `openai` calls cloud APIs. `nomic-embed-text` is a good local model for Ollama.
 - **`enrichment`** — Optional LLM step that enhances memories before storing (better summaries, auto-tags). Set to `none` to skip.
 - **`context`** — Controls how memories are retrieved at session start. `auto` uses vector search when embeddings are available, falls back to keywords. `topup_recent` also includes recent memories so the agent has fresh context.
 
@@ -224,7 +224,7 @@ To also remove all stored memories: `rm -rf ~/.memory/`
 
 ## Privacy
 
-Everything stays local by default. If you configure OpenAI or OpenRouter for embeddings, those API calls go to their servers. Use Ollama for fully local operation.
+Everything stays local by default. If you configure OpenAI for embeddings, those API calls go to their servers. Use Ollama for fully local operation.
 
 ## License
 
