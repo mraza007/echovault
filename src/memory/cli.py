@@ -102,6 +102,7 @@ _CONFIG_TEMPLATE = """\
 embedding:
   provider: ollama              # ollama | openai
   model: nomic-embed-text
+  # base_url: http://localhost:11434   # ollama default; for openai: https://api.openai.com/v1
   # api_key: sk-...            # required for openai
 
 # How memories are retrieved at session start.
