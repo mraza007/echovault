@@ -23,3 +23,5 @@ class OpenAIEmbedding(EmbeddingProvider):
         )
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
+
+    search = embed

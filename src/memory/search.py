@@ -99,7 +99,7 @@ def tiered_search(
 
     # FTS results are sparse — fall back to hybrid (embed + vector search + merge)
     try:
-        query_vec = embedding_provider.embed(query)
+        query_vec = embedding_provider.search(query)
         vec_results = db.vector_search(
             query_vec, limit=limit * 2, project=project, source=source
         )
@@ -144,7 +144,7 @@ def hybrid_search(
                 r["score"] = r["score"] / max_score if max_score > 0 else 0.0
         return fts_results[:limit]
 
-    query_vec = embedding_provider.embed(query)
+    query_vec = embedding_provider.search(query)
     vec_results = db.vector_search(
         query_vec, limit=limit * 2, project=project, source=source
     )
