@@ -384,6 +384,52 @@ def context(project, source, limit, query, semantic_mode, show_config, output_fo
     click.echo('Use `memory search <query>` for full details on any memory.')
 
 
+@main.command("import")
+@click.option("--dry-run", is_flag=True, default=False, help="Show what would be imported without changing anything")
+@click.option("--reindex", "do_reindex", is_flag=True, default=False, help="Run reindex after importing")
+def import_vault(dry_run, do_reindex):
+    """Import memories from vault markdown files into the local index.
+
+    Scans all .md files in vault/ sub-directories, parses H3 memory
+    sections, and inserts any that are missing from the local SQLite
+    database.  Useful in multi-agent setups where new files arrive
+    via file-sync (e.g. Syncthing) but are not yet indexed.
+
+    Deduplication is by (project, title) — existing memories are skipped.
+    """
+    svc = MemoryService()
+
+    if dry_run:
+        click.echo("Dry run — no changes will be made.\n")
+
+    def progress(imported, skipped, project, title):
+        if dry_run:
+            click.echo(f"  [new] {project}/{title}")
+
+    result = svc.import_from_vault(dry_run=dry_run, progress_callback=progress)
+
+    click.echo(f"\nImported: {result['imported']}, Skipped (already exists): {result['skipped']}")
+    if result["projects"]:
+        click.echo(f"Projects with new imports: {', '.join(result['projects'])}")
+
+    if do_reindex and result["imported"] > 0 and not dry_run:
+        total = svc.db.count_memories()
+        click.echo(f"\nReindexing {total} memories with {svc.config.embedding.provider}/{svc.config.embedding.model}...")
+
+        def reindex_progress(current, count):
+            click.echo(f"  {current}/{count}", nl=(current == count))
+            if current < count:
+                click.echo("\r", nl=False)
+
+        reindex_result = svc.reindex(progress_callback=reindex_progress)
+        click.echo(
+            f"Re-indexed {reindex_result['count']} memories with "
+            f"{reindex_result['model']} ({reindex_result['dim']} dims)"
+        )
+
+    svc.close()
+
+
 @main.command()
 def reindex():
     """Rebuild vector index with current embedding provider."""
