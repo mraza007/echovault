@@ -13,8 +13,11 @@ All CLI commands use this service as the main entry point.
 
 import json
 import os
+import re
 import sys
-from datetime import date
+import uuid
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from memory.config import get_memory_home, load_config
@@ -518,6 +521,210 @@ class MemoryService:
             "count": total,
             "dim": dim,
             "model": self.config.embedding.model,
+        }
+
+    # ------------------------------------------------------------------
+    # Vault import — parse markdown session files into SQLite index
+    # ------------------------------------------------------------------
+
+    _HEADING_TO_CATEGORY: dict[str, str] = {
+        "Decisions": "decision",
+        "Patterns": "pattern",
+        "Bugs Fixed": "bug",
+        "Context": "context",
+        "Learnings": "learning",
+    }
+
+    @staticmethod
+    def _parse_frontmatter(content: str) -> dict:
+        """Extract simple key-value frontmatter from ``---`` fenced block."""
+        fm: dict = {}
+        if not content.startswith("---"):
+            return fm
+        parts = content.split("---\n", 2)
+        if len(parts) < 3:
+            return fm
+        for line in parts[1].strip().split("\n"):
+            if ":" not in line:
+                continue
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            if val.startswith("[") and val.endswith("]"):
+                val = [v.strip() for v in val[1:-1].split(",") if v.strip()]
+            fm[key] = val
+        return fm
+
+    @classmethod
+    def _parse_memories_from_md(cls, filepath: str, project: str) -> list[dict]:
+        """Parse H3 sections from a vault session markdown file.
+
+        Each ``### Title`` followed by ``**What:** …`` (and optional
+        ``**Why:**``, ``**Impact:**``, ``**Source:**``, ``<details>``)
+        becomes one memory dict.
+        """
+        content = Path(filepath).read_text(encoding="utf-8", errors="replace")
+        fm = cls._parse_frontmatter(content)
+
+        date_match = re.match(r"(\d{4}-\d{2}-\d{2})", Path(filepath).stem)
+        date_str = date_match.group(1) if date_match else date.today().isoformat()
+
+        memories: list[dict] = []
+        current_category: Optional[str] = None
+
+        lines = content.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            if line.startswith("## "):
+                heading = line[3:].strip()
+                current_category = cls._HEADING_TO_CATEGORY.get(heading)
+
+            if line.startswith("### "):
+                title = line[4:].strip()
+                what: Optional[str] = None
+                why: Optional[str] = None
+                impact: Optional[str] = None
+                source: Optional[str] = None
+                details_lines: list[str] = []
+                in_details = False
+
+                i += 1
+                while i < len(lines) and not lines[i].startswith("### ") and not lines[i].startswith("## "):
+                    stripped = lines[i].strip()
+
+                    if stripped == "<details>":
+                        in_details = True
+                        i += 1
+                        continue
+                    if stripped == "</details>":
+                        in_details = False
+                        i += 1
+                        continue
+                    if in_details:
+                        details_lines.append(lines[i])
+                        i += 1
+                        continue
+
+                    if stripped.startswith("**What:**"):
+                        what = stripped[len("**What:**"):].strip()
+                    elif stripped.startswith("**Why:**"):
+                        why = stripped[len("**Why:**"):].strip()
+                    elif stripped.startswith("**Impact:**"):
+                        impact = stripped[len("**Impact:**"):].strip()
+                    elif stripped.startswith("**Source:**"):
+                        source = stripped[len("**Source:**"):].strip()
+
+                    i += 1
+
+                if title and what:
+                    fm_tags = fm.get("tags", [])
+                    memories.append({
+                        "title": title,
+                        "what": what,
+                        "why": why,
+                        "impact": impact,
+                        "source": source,
+                        "category": current_category,
+                        "project": project,
+                        "tags": fm_tags if isinstance(fm_tags, list) else [],
+                        "date": date_str,
+                        "file_path": filepath,
+                        "details": "\n".join(details_lines).strip() or None,
+                    })
+                continue
+
+            i += 1
+
+        return memories
+
+    def import_from_vault(
+        self,
+        dry_run: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        """Scan vault/ markdown files and import memories missing from SQLite.
+
+        This bridges the gap for multi-agent setups where new ``.md``
+        files arrive via file-sync (e.g. Syncthing) but are not yet in
+        the local ``index.db``.
+
+        Deduplication key: ``(project, title)``.
+
+        Args:
+            dry_run: If True, only report what *would* be imported.
+            progress_callback: Optional ``callable(imported, skipped, project, title)``
+                called for every memory encountered.
+
+        Returns:
+            Dict with ``imported`` (int), ``skipped`` (int), ``projects``
+            (list of project names that had new imports).
+        """
+        if not os.path.isdir(self.vault_dir):
+            return {"imported": 0, "skipped": 0, "projects": []}
+
+        # Build set of existing (project, title) pairs
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT project, title FROM memories")
+        existing: set[tuple[str, str]] = {
+            (row[0], row[1]) for row in cursor.fetchall()
+        }
+
+        imported = 0
+        skipped = 0
+        touched_projects: set[str] = set()
+
+        for project_dir in sorted(Path(self.vault_dir).iterdir()):
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+
+            project = project_dir.name
+
+            for md_file in sorted(project_dir.glob("*.md")):
+                parsed = self._parse_memories_from_md(str(md_file), project)
+
+                for mem_data in parsed:
+                    key = (mem_data["project"], mem_data["title"])
+                    if key in existing:
+                        skipped += 1
+                        if progress_callback:
+                            progress_callback(imported, skipped, project, mem_data["title"])
+                        continue
+
+                    if not dry_run:
+                        now = datetime.now(timezone.utc).isoformat()
+                        anchor = re.sub(r"[^a-z0-9]+", "-", mem_data["title"].lower()).strip("-")
+
+                        mem = Memory(
+                            id=str(uuid.uuid4()),
+                            title=mem_data["title"],
+                            what=mem_data["what"],
+                            why=mem_data["why"],
+                            impact=mem_data["impact"],
+                            tags=mem_data["tags"],
+                            category=mem_data["category"],
+                            project=mem_data["project"],
+                            source=mem_data["source"],
+                            related_files=[],
+                            file_path=mem_data["file_path"],
+                            section_anchor=anchor,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        self.db.insert_memory(mem, details=mem_data.get("details"))
+                        existing.add(key)
+
+                    imported += 1
+                    touched_projects.add(project)
+
+                    if progress_callback:
+                        progress_callback(imported, skipped, project, mem_data["title"])
+
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "projects": sorted(touched_projects),
         }
 
     def close(self) -> None:
