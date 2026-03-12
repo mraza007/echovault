@@ -305,3 +305,57 @@ class TestWriteSessionMemory:
         learnings_pos = content.index("## Learnings")
 
         assert decisions_pos < patterns_pos < learnings_pos
+
+    def test_write_uses_utf8_for_unicode_content(
+        self, temp_vault: str, sample_memory: Memory
+    ) -> None:
+        """Test writing Unicode content does not depend on system locale."""
+        sample_memory.what = "unicode — кириллица ✓"
+
+        file_path = write_session_memory(temp_vault, sample_memory, "2026-01-22")
+
+        content = Path(file_path).read_text(encoding="utf-8")
+        assert "unicode — кириллица ✓" in content
+
+    def test_write_reads_legacy_cp1251_and_rewrites_utf8(self, temp_vault: str) -> None:
+        """Test appending to a legacy cp1251 file rewrites it as UTF-8."""
+        file_path = Path(temp_vault) / "2026-01-22-session.md"
+        legacy_content = """---
+project: my-project
+sources: [claude-code]
+created: 2026-01-22T14:30:00Z
+tags: [legacy]
+---
+
+# 2026-01-22 Session
+
+## Context
+
+### Legacy entry
+**What:** старый текст
+**Source:** claude-code
+"""
+        file_path.write_text(legacy_content, encoding="cp1251")
+
+        memory = Memory(
+            id="test-unicode",
+            title="Unicode append",
+            what="новый текст — ✓",
+            why=None,
+            impact=None,
+            tags=["unicode"],
+            category="context",
+            project="my-project",
+            source="claude-code",
+            related_files=[],
+            file_path="2026-01-22-session.md",
+            section_anchor="unicode-append",
+            created_at="2026-01-22T18:00:00Z",
+            updated_at="2026-01-22T18:00:00Z",
+        )
+
+        write_session_memory(temp_vault, memory, "2026-01-22")
+
+        content = file_path.read_text(encoding="utf-8")
+        assert "старый текст" in content
+        assert "новый текст — ✓" in content
