@@ -1,5 +1,6 @@
 """Markdown rendering and session file writing for memories."""
 
+import locale
 import os
 import re
 from datetime import datetime, timezone
@@ -7,6 +8,23 @@ from pathlib import Path
 from typing import Optional
 
 from memory.models import CATEGORY_HEADINGS, VALID_CATEGORIES, Memory
+
+
+def _read_session_text(file_path: Path) -> str:
+    """Read an existing session file with encoding fallbacks."""
+    encodings = ["utf-8-sig", "utf-8", locale.getpreferredencoding(False), "cp1251"]
+    seen: set[str] = set()
+
+    for encoding in encodings:
+        if not encoding or encoding in seen:
+            continue
+        seen.add(encoding)
+        try:
+            return file_path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return file_path.read_text(encoding="utf-8", errors="replace")
 
 
 def render_section(mem: Memory, details: Optional[str] = None) -> str:
@@ -63,12 +81,12 @@ def write_session_memory(
     if not file_path.exists():
         # Create new file
         content = _create_new_session_file(mem, date_str, section_content)
-        file_path.write_text(content)
+        file_path.write_text(content, encoding="utf-8")
     else:
         # Append to existing file
-        content = file_path.read_text()
+        content = _read_session_text(file_path)
         updated_content = _append_to_session_file(content, mem, section_content)
-        file_path.write_text(updated_content)
+        file_path.write_text(updated_content, encoding="utf-8")
 
     return str(file_path)
 
