@@ -1,6 +1,7 @@
 """SQLite database layer with FTS5 and sqlite-vec for memory storage."""
 
 import json
+import re
 import struct
 from typing import Optional
 
@@ -13,6 +14,55 @@ except ImportError:
 import sqlite_vec
 
 from memory.models import Memory, MemoryDetail
+
+
+_FTS_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "with",
+}
+
+
+def _build_fts_query(query: str) -> str:
+    """Build a prefix FTS query while dropping obvious lexical noise.
+
+    FTS is only used as a lexical signal. Filtering short/common stop-words keeps
+    multi-word natural-language queries from matching nearly every memory.
+    """
+    raw_terms = re.findall(r"\w+", query.lower(), flags=re.UNICODE)
+    filtered_terms = [
+        term for term in raw_terms if len(term) > 1 and term not in _FTS_STOPWORDS
+    ]
+
+    # Fall back gracefully for short or stop-word-only queries such as "AI" or "in".
+    terms = filtered_terms or raw_terms or [query.strip()]
+
+    unique_terms: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        if term and term not in seen:
+            unique_terms.append(term)
+            seen.add(term)
+
+    return " OR ".join(f'"{term}"*' for term in unique_terms)
 
 
 class MemoryDB:
@@ -395,9 +445,8 @@ class MemoryDB:
         Returns:
             List of memory dictionaries with BM25 scores
         """
-        # Build prefix matching query
-        terms = query.split()
-        fts_query = " OR ".join(f'"{term}"*' for term in terms)
+        # Build prefix matching query while filtering obvious stop-word noise.
+        fts_query = _build_fts_query(query)
 
         # Build WHERE clause for filters
         where_clauses = []
@@ -454,30 +503,45 @@ class MemoryDB:
 
         vec_bytes = struct.pack(f"{len(query_embedding)}f", *query_embedding)
 
+        # sqlite-vec applies k before SQL post-filters. When filtering by project or
+        # source, over-fetch candidate vectors so the final filtered set still has
+        # relevant rows from the desired slice.
+        fetch_k = limit
+        if project or source:
+            fetch_k = max(limit * 20, 100)
+
+        where_clauses = ["v.embedding MATCH ?", "k = ?"]
+        params: list = [vec_bytes, fetch_k]
+
+        if project:
+            where_clauses.append("m.project = ?")
+            params.append(project)
+
+        if source:
+            where_clauses.append("m.source = ?")
+            params.append(source)
+
+        where_clause = " AND ".join(where_clauses)
+
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT m.*, v.distance,
                    EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
             FROM memories_vec v
             JOIN memories m ON m.rowid = v.rowid
-            WHERE v.embedding MATCH ?
-            AND k = ?
+            WHERE {where_clause}
             ORDER BY v.distance
-        """, (vec_bytes, limit))
+        """, params)
 
         results = []
         for row in cursor.fetchall():
             result = dict(row)
-            # Convert distance to similarity score (1 - distance)
-            result["score"] = 1.0 - result["distance"]
+            # sqlite-vec returns distance where smaller is better. Convert it to a
+            # bounded positive similarity score so hybrid ranking can merge it.
+            distance = float(result["distance"])
+            result["score"] = 1.0 / (1.0 + max(distance, 0.0))
             del result["distance"]
             results.append(result)
-
-        # Post-filter by project/source if needed
-        if project:
-            results = [r for r in results if r["project"] == project]
-        if source:
-            results = [r for r in results if r["source"] == source]
 
         return results
 
