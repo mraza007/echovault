@@ -217,6 +217,7 @@ dependencies = [
     { name = "pysqlite3" },
     { name = "pyyaml" },
     { name = "sqlite-vec" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.optional-dependencies]
@@ -233,6 +234,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlite-vec", specifier = ">=0.1.6" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
 provides-extras = ["dev"]
 
