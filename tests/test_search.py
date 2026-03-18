@@ -1,7 +1,7 @@
 """Tests for hybrid search functionality."""
 
 import pytest
-from memory.search import merge_results, hybrid_search
+from memory.search import adjust_result_scores, merge_results
 
 
 class TestMergeResults:
@@ -220,6 +220,50 @@ class TestTieredSearch:
         embed_provider.embed.assert_called_once()
         assert len(results) >= 1
 
+    def test_tiered_search_calls_embedding_when_fts_is_only_noise(self):
+        """Weak lexical tail should not suppress semantic search."""
+        from unittest.mock import MagicMock
+        from memory.search import tiered_search
+
+        db = MagicMock()
+        db.fts_search.return_value = [
+            {"id": "1", "title": "Bare lexical hit", "score": 10.0},
+            {"id": "2", "title": "Stopword noise", "score": 1.4},
+            {"id": "3", "title": "More stopword noise", "score": 1.0},
+        ]
+        db.vector_search.return_value = [
+            {"id": "4", "title": "Semantic match", "score": 0.9},
+        ]
+
+        embed_provider = MagicMock()
+        embed_provider.embed.return_value = [0.1] * 768
+
+        results = tiered_search(db, embed_provider, "natural language question", limit=5)
+
+        embed_provider.embed.assert_called_once()
+        assert len(results) >= 1
+
+    def test_tiered_search_prefers_semantic_top_hit_when_single_lexical_result_conflicts(self):
+        """A lone lexical hit should not dominate a stronger semantic result."""
+        from unittest.mock import MagicMock
+        from memory.search import tiered_search
+
+        db = MagicMock()
+        db.fts_search.return_value = [
+            {"id": "lexical", "title": "Keyword overlap", "score": 6.0},
+        ]
+        db.vector_search.return_value = [
+            {"id": "semantic", "title": "Best semantic match", "score": 0.95},
+            {"id": "lexical", "title": "Keyword overlap", "score": 0.20},
+        ]
+
+        embed_provider = MagicMock()
+        embed_provider.embed.return_value = [0.1] * 768
+
+        results = tiered_search(db, embed_provider, "paraphrased idea", limit=5)
+
+        assert results[0]["id"] == "semantic"
+
     def test_tiered_search_fts_only_when_no_embed_provider(self):
         """Test that tiered search works with no embedding provider."""
         from unittest.mock import MagicMock
@@ -279,3 +323,30 @@ class TestTieredSearch:
         assert result["source"] == "mysource"
         assert result["timestamp"] == "2024-01-01"
         assert "score" in result  # Score is updated
+
+
+class TestAdjustResultScores:
+    """Unit tests for low-signal diagnostic down-ranking."""
+
+    def test_downranks_probe_results_for_normal_queries(self):
+        """Diagnostic probe memories should not dominate user-facing retrieval."""
+        results = [
+            {"id": "probe", "title": "Temporary probe memory", "category": "test", "tags": "[]", "score": 1.0},
+            {"id": "real", "title": "Production auth fix", "category": "bug", "tags": '["auth"]', "score": 0.8},
+        ]
+
+        ranked = adjust_result_scores(results, "auth issue")
+
+        assert ranked[0]["id"] == "real"
+        assert ranked[1]["id"] == "probe"
+
+    def test_preserves_probe_results_when_query_explicitly_requests_diagnostics(self):
+        """Do not hide diagnostic memories when the user explicitly asks for them."""
+        results = [
+            {"id": "probe", "title": "Temporary probe memory", "category": "test", "tags": "[]", "score": 1.0},
+            {"id": "real", "title": "Production auth fix", "category": "bug", "tags": '["auth"]', "score": 0.8},
+        ]
+
+        ranked = adjust_result_scores(results, "diagnostic probe memory")
+
+        assert ranked[0]["id"] == "probe"

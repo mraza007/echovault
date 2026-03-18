@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from memory.db import DimensionMismatchError, MemoryDB
+from memory.db import DimensionMismatchError, MemoryDB, _build_fts_query
 from memory.models import Memory, MemoryDetail, RawMemoryInput
 
 
@@ -144,6 +144,18 @@ def test_fts_prefix_matching(db):
     assert results[0]["id"] == memory.id
 
 
+def test_build_fts_query_filters_stopword_noise():
+    """Common glue words should not dominate prefix FTS queries."""
+    query = _build_fts_query("a musician in the mist")
+    assert query == '"musician"* OR "mist"*'
+
+
+def test_build_fts_query_falls_back_for_short_query():
+    """Short queries should still remain searchable."""
+    query = _build_fts_query("AI")
+    assert query == '"ai"*'
+
+
 def test_insert_and_search_vectors(db):
     """Test inserting and searching vectors."""
     # Set up vec table with correct dimension
@@ -188,6 +200,28 @@ def test_insert_and_search_vectors(db):
 
     # Check similarity scores (1 - distance)
     assert results[0]["score"] > results[2]["score"]
+
+
+def test_vector_search_with_project_filter_overfetches_candidates(db):
+    """Project filtering should still return in-scope vector hits when global top-k differs."""
+    db.ensure_vec_table(3)
+
+    raw_other = RawMemoryInput(title="Other project exact hit", what="Global nearest vector", category="context")
+    other = Memory.from_raw(raw_other, project="other-project", file_path="test.md")
+    other_rowid = db.insert_memory(other)
+    db.insert_vector(other_rowid, [1.0, 0.0, 0.0])
+
+    raw_target = RawMemoryInput(title="Target project near hit", what="Project-scoped vector", category="context")
+    target = Memory.from_raw(raw_target, project="target-project", file_path="test.md")
+    target_rowid = db.insert_memory(target)
+    db.insert_vector(target_rowid, [0.9, 0.0, 0.0])
+
+    results = db.vector_search([1.0, 0.0, 0.0], limit=1, project="target-project")
+
+    assert len(results) == 1
+    assert results[0]["id"] == target.id
+    assert results[0]["project"] == "target-project"
+    assert results[0]["score"] > 0
 
 
 def test_filter_by_project(db):
