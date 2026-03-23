@@ -2,6 +2,7 @@
 
 import os
 import textwrap
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -20,6 +21,14 @@ def _write_session_md(vault_dir, project, filename, content):
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(textwrap.dedent(content))
     return filepath
+
+
+def _write_session_md_bytes(vault_dir, project, filename, content_bytes):
+    proj_dir = os.path.join(vault_dir, project)
+    os.makedirs(proj_dir, exist_ok=True)
+    filepath = Path(proj_dir) / filename
+    filepath.write_bytes(content_bytes)
+    return str(filepath)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +95,41 @@ class TestImportFromVault:
         second = svc.import_from_vault()
         assert second["imported"] == 0
         assert second["skipped"] == 1
+
+        svc.close()
+
+    def test_allows_same_title_in_different_session_files(self, env_home):
+        """Same-title memories in different session files should both import."""
+        vault = os.path.join(str(env_home), "vault")
+        for filename, what in [
+            ("2026-03-04-session.md", "Updated the Python dependencies."),
+            ("2026-03-05-session.md", "Updated the Node dependencies."),
+        ]:
+            _write_session_md(vault, "ProjDup", filename, f"""\
+                ---
+                project: ProjDup
+                tags: [deps]
+                created: 2026-03-04T10:00:00+00:00
+                ---
+
+                # Session
+
+                ## Context
+
+                ### Dependency update
+                **What:** {what}
+            """)
+
+        svc = MemoryService()
+
+        first = svc.import_from_vault()
+        second = svc.import_from_vault()
+        results = svc.search("Dependency update", limit=10, use_vectors=False)
+
+        assert first["imported"] == 2
+        assert second["imported"] == 0
+        assert second["skipped"] == 2
+        assert len(results) == 2
 
         svc.close()
 
@@ -203,6 +247,77 @@ class TestImportFromVault:
 
         assert result["imported"] == 2
         assert set(result["projects"]) == {"Alpha", "Beta"}
+
+    def test_import_reads_legacy_cp1251_markdown(self, env_home):
+        """Import should decode legacy Windows-authored markdown content."""
+        vault = os.path.join(str(env_home), "vault")
+        content = textwrap.dedent("""\
+            ---
+            project: LegacyProj
+            tags: [legacy]
+            created: 2026-03-04T10:00:00+00:00
+            ---
+
+            # 2026-03-04 Session
+
+            ## Context
+
+            ### Старый импорт
+            **What:** старый текст
+        """)
+        _write_session_md_bytes(
+            vault,
+            "LegacyProj",
+            "2026-03-04-session.md",
+            content.encode("cp1251"),
+        )
+
+        svc = MemoryService()
+        result = svc.import_from_vault()
+        recent = svc.db.list_recent(limit=1, project="LegacyProj")
+        memory = svc.db.get_memory(recent[0]["id"])
+
+        assert result["imported"] == 1
+        assert memory is not None
+        assert memory["title"] == "Старый импорт"
+        assert memory["what"] == "старый текст"
+
+        svc.close()
+
+    def test_import_parses_utf8_sig_crlf_frontmatter(self, env_home):
+        """Import should parse BOM/CRLF frontmatter and keep tags."""
+        vault = os.path.join(str(env_home), "vault")
+        content = textwrap.dedent("""\
+            ---
+            project: BomProj
+            tags: [infra, sync]
+            created: 2026-03-04T10:00:00+00:00
+            ---
+
+            # 2026-03-04 Session
+
+            ## Context
+
+            ### CRLF import
+            **What:** Frontmatter should still parse.
+        """).replace("\n", "\r\n")
+        _write_session_md_bytes(
+            vault,
+            "BomProj",
+            "2026-03-04-session.md",
+            content.encode("utf-8-sig"),
+        )
+
+        svc = MemoryService()
+        result = svc.import_from_vault()
+        recent = svc.db.list_recent(limit=1, project="BomProj")
+        memory = svc.db.get_memory(recent[0]["id"])
+
+        assert result["imported"] == 1
+        assert memory is not None
+        assert memory["tags"] == '["infra", "sync"]'
+
+        svc.close()
 
 
 # ---------------------------------------------------------------------------
