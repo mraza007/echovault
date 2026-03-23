@@ -23,7 +23,7 @@ from typing import Optional
 from memory.config import get_memory_home, load_config
 from memory.db import DimensionMismatchError, MemoryDB
 from memory.embeddings.base import EmbeddingProvider
-from memory.markdown import write_session_memory
+from memory.markdown import read_markdown_text, write_session_memory
 from memory.models import Memory, MemoryDetail, RawMemoryInput
 from memory.redaction import load_memoryignore, redact
 from memory.search import hybrid_search, tiered_search
@@ -536,12 +536,26 @@ class MemoryService:
     }
 
     @staticmethod
+    def _normalize_markdown_content(content: str) -> str:
+        """Normalize markdown text for line-oriented parsing."""
+        return content.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
+    @staticmethod
+    def _make_section_anchor(title: str, occurrence: int = 1) -> str:
+        """Create a stable section anchor, suffixing repeated titles."""
+        base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "memory"
+        if occurrence <= 1:
+            return base
+        return f"{base}-{occurrence}"
+
+    @staticmethod
     def _parse_frontmatter(content: str) -> dict:
         """Extract simple key-value frontmatter from ``---`` fenced block."""
         fm: dict = {}
-        if not content.startswith("---"):
+        normalized = MemoryService._normalize_markdown_content(content)
+        if not normalized.startswith("---\n"):
             return fm
-        parts = content.split("---\n", 2)
+        parts = normalized.split("---\n", 2)
         if len(parts) < 3:
             return fm
         for line in parts[1].strip().split("\n"):
@@ -563,7 +577,7 @@ class MemoryService:
         ``**Why:**``, ``**Impact:**``, ``**Source:**``, ``<details>``)
         becomes one memory dict.
         """
-        content = Path(filepath).read_text(encoding="utf-8", errors="replace")
+        content = cls._normalize_markdown_content(read_markdown_text(Path(filepath)))
         fm = cls._parse_frontmatter(content)
 
         date_match = re.match(r"(\d{4}-\d{2}-\d{2})", Path(filepath).stem)
@@ -571,6 +585,7 @@ class MemoryService:
 
         memories: list[dict] = []
         current_category: Optional[str] = None
+        anchor_counts: dict[str, int] = {}
 
         lines = content.split("\n")
         i = 0
@@ -619,6 +634,9 @@ class MemoryService:
                     i += 1
 
                 if title and what:
+                    base_anchor = cls._make_section_anchor(title)
+                    occurrence = anchor_counts.get(base_anchor, 0) + 1
+                    anchor_counts[base_anchor] = occurrence
                     fm_tags = fm.get("tags", [])
                     memories.append({
                         "title": title,
@@ -631,6 +649,7 @@ class MemoryService:
                         "tags": fm_tags if isinstance(fm_tags, list) else [],
                         "date": date_str,
                         "file_path": filepath,
+                        "section_anchor": cls._make_section_anchor(title, occurrence),
                         "details": "\n".join(details_lines).strip() or None,
                     })
                 continue
@@ -650,7 +669,7 @@ class MemoryService:
         files arrive via file-sync (e.g. Syncthing) but are not yet in
         the local ``index.db``.
 
-        Deduplication key: ``(project, title)``.
+        Deduplication key: ``(project, file_path, section_anchor)``.
 
         Args:
             dry_run: If True, only report what *would* be imported.
@@ -664,11 +683,16 @@ class MemoryService:
         if not os.path.isdir(self.vault_dir):
             return {"imported": 0, "skipped": 0, "projects": []}
 
-        # Build set of existing (project, title) pairs
+        # Build set of existing section identities.
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT project, title FROM memories")
-        existing: set[tuple[str, str]] = {
-            (row[0], row[1]) for row in cursor.fetchall()
+        cursor.execute("SELECT project, file_path, section_anchor, title FROM memories")
+        existing: set[tuple[str, str, str]] = {
+            (
+                row[0],
+                row[1],
+                row[2] or self._make_section_anchor(row[3]),
+            )
+            for row in cursor.fetchall()
         }
 
         imported = 0
@@ -685,7 +709,11 @@ class MemoryService:
                 parsed = self._parse_memories_from_md(str(md_file), project)
 
                 for mem_data in parsed:
-                    key = (mem_data["project"], mem_data["title"])
+                    key = (
+                        mem_data["project"],
+                        mem_data["file_path"],
+                        mem_data["section_anchor"],
+                    )
                     if key in existing:
                         skipped += 1
                         if progress_callback:
@@ -694,8 +722,6 @@ class MemoryService:
 
                     if not dry_run:
                         now = datetime.now(timezone.utc).isoformat()
-                        anchor = re.sub(r"[^a-z0-9]+", "-", mem_data["title"].lower()).strip("-")
-
                         mem = Memory(
                             id=str(uuid.uuid4()),
                             title=mem_data["title"],
@@ -708,7 +734,7 @@ class MemoryService:
                             source=mem_data["source"],
                             related_files=[],
                             file_path=mem_data["file_path"],
-                            section_anchor=anchor,
+                            section_anchor=mem_data["section_anchor"],
                             created_at=now,
                             updated_at=now,
                         )

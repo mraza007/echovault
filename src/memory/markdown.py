@@ -10,8 +10,8 @@ from typing import Optional
 from memory.models import CATEGORY_HEADINGS, VALID_CATEGORIES, Memory
 
 
-def _read_session_text(file_path: Path) -> str:
-    """Read an existing session file with encoding fallbacks."""
+def read_markdown_text(file_path: Path) -> str:
+    """Read a markdown file with encoding fallbacks."""
     encodings = ["utf-8-sig", "utf-8", locale.getpreferredencoding(False), "cp1251"]
     seen: set[str] = set()
 
@@ -84,7 +84,7 @@ def write_session_memory(
         file_path.write_text(content, encoding="utf-8")
     else:
         # Append to existing file
-        content = _read_session_text(file_path)
+        content = read_markdown_text(file_path)
         updated_content = _append_to_session_file(content, mem, section_content)
         file_path.write_text(updated_content, encoding="utf-8")
 
