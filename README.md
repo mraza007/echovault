@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#install">Install</a> · <a href="#features">Features</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="https://muhammadraza.me/2026/building-local-memory-for-coding-agents/">Blog post</a>
+  <a href="#install">Install</a> · <a href="#features">Features</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="https://github.com/mraza007/echovault/releases">Releases</a> · <a href="https://muhammadraza.me/2026/building-local-memory-for-coding-agents/">Blog post</a>
 </p>
 
 ---
@@ -46,13 +46,23 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 ## Install
 
+Install the latest stable release:
+
 ```bash
-pip install git+https://github.com/mraza007/echovault.git
+pip install git+https://github.com/mraza007/echovault.git@v0.2.0
 memory init
 memory setup claude-code   # or: cursor, codex, opencode
 ```
 
 That's it. `memory setup` installs MCP server config automatically.
+
+If you want the newest unreleased changes from `main`, install directly from the branch instead:
+
+```bash
+pip install git+https://github.com/mraza007/echovault.git@main
+```
+
+Release notes live in [CHANGELOG.md](CHANGELOG.md) and on the [GitHub Releases](https://github.com/mraza007/echovault/releases) page.
 
 By default config is installed globally. To install for a specific project:
 
@@ -165,6 +175,39 @@ memory dashboard
 
 For long details, use `--details-file notes.md`. To scaffold structured details automatically, use `--details-template`.
 
+### Terminal dashboard
+
+EchoVault ships with a full-screen local terminal dashboard:
+
+```bash
+memory dashboard
+```
+
+Use it to:
+
+- browse memories across the whole vault
+- filter by project, category, and archived state
+- inspect full memory details without leaving the terminal
+- create and edit memories
+- archive or restore memories safely
+- review duplicate candidates and merge them
+- run `memory import` and `memory reindex` from one place
+
+Helpful shortcuts:
+
+- `1` overview
+- `2` memories
+- `3` duplicate review
+- `4` operations
+- `/` focus search
+- `n` new memory
+- `s` save memory
+- `a` archive or restore selected memory
+- `m` merge selected duplicate pair
+- `i` import memories
+- `R` reindex vectors
+- `q` quit
+
 ## How it works
 
 ```
@@ -204,6 +247,7 @@ All agents share the same memory vault at your effective `memory_home` path (def
 | `memory details <id>` | Full details for a memory |
 | `memory delete <id>` | Delete a memory by ID or prefix |
 | `memory context --project` | List memories for current project |
+| `memory import` | Import markdown memories into the SQLite index |
 | `memory sessions` | List session files |
 | `memory dashboard` | Launch the terminal dashboard |
 | `memory config` | Show effective config |
