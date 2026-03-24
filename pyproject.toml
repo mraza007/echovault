@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "echovault"
-version = "0.1.1"
+version = "0.2.0"
 description = "Local-first memory system for coding agents with Obsidian-native markdown storage"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "pysqlite3>=0.6.0",
     "httpx>=0.27.0",
     "mcp>=1.0",
+    "textual>=0.52.1",
     "tomli>=2.0; python_version < '3.11'",
 ]
 

@@ -395,7 +395,7 @@ def import_vault(dry_run, do_reindex):
     database.  Useful in multi-agent setups where new files arrive
     via file-sync (e.g. Syncthing) but are not yet indexed.
 
-    Deduplication is by (project, title) — existing memories are skipped.
+    Deduplication is by (project, file_path, section_anchor) — existing memories are skipped.
     """
     svc = MemoryService()
 
@@ -488,6 +488,21 @@ def sessions(limit, project):
     for proj, fname in session_files[:limit]:
         date_str = fname.replace("-session.md", "")
         click.echo(f"  {date_str} | {proj}")
+
+
+@main.command()
+@click.option("--project", default=None, help="Initial project filter for the dashboard")
+@click.option("--include-archived", is_flag=True, default=False, help="Show archived memories on launch")
+def dashboard(project, include_archived):
+    """Launch the EchoVault terminal dashboard."""
+    from memory.dashboard import MemoryDashboardApp
+
+    svc = MemoryService()
+    try:
+        app = MemoryDashboardApp(service=svc, initial_project=project, include_archived=include_archived)
+        app.run()
+    finally:
+        svc.close()
 
 
 def _resolve_config_dir(agent_dot_dir: str, config_dir: str | None, project: bool) -> str:

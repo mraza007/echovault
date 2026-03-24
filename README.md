@@ -42,6 +42,8 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 **Obsidian-compatible** — Session files are valid Markdown with YAML frontmatter. Point Obsidian at `~/.memory/vault/` and browse your agent's memory visually.
 
+**Terminal dashboard** — Launch `memory dashboard` for a full-screen local TUI with search, stats, archive/restore flows, duplicate review, import, and reindex controls.
+
 ## Install
 
 ```bash
@@ -158,6 +160,7 @@ Follow-up:"
 memory search "authentication"
 memory details <id>
 memory context --project
+memory dashboard
 ```
 
 For long details, use `--details-file notes.md`. To scaffold structured details automatically, use `--details-template`.
@@ -202,6 +205,7 @@ All agents share the same memory vault at your effective `memory_home` path (def
 | `memory delete <id>` | Delete a memory by ID or prefix |
 | `memory context --project` | List memories for current project |
 | `memory sessions` | List session files |
+| `memory dashboard` | Launch the terminal dashboard |
 | `memory config` | Show effective config |
 | `memory config init` | Generate a starter config.yaml |
 | `memory config set-home <path>` | Persist default memory location |

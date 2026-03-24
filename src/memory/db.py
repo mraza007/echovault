@@ -107,7 +107,11 @@ class MemoryDB:
                 file_path TEXT NOT NULL,
                 section_anchor TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                archived_at TEXT,
+                archive_reason TEXT,
+                superseded_by TEXT
             )
         """)
 
@@ -159,6 +163,14 @@ class MemoryDB:
         columns = {row[1] for row in cursor.fetchall()}
         if "updated_count" not in columns:
             cursor.execute("ALTER TABLE memories ADD COLUMN updated_count INTEGER DEFAULT 0")
+        if "status" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'")
+        if "archived_at" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN archived_at TEXT")
+        if "archive_reason" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN archive_reason TEXT")
+        if "superseded_by" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT")
 
         # Create vec table if dimension is already known (e.g. reopening existing DB)
         dim = self.get_embedding_dim()
@@ -250,13 +262,13 @@ class MemoryDB:
             INSERT INTO memories (
                 id, title, what, why, impact, tags, category, project,
                 source, related_files, file_path, section_anchor,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, status, archived_at, archive_reason, superseded_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             mem.id, mem.title, mem.what, mem.why, mem.impact,
             tags_json, mem.category, mem.project, mem.source,
             related_files_json, mem.file_path, mem.section_anchor,
-            mem.created_at, mem.updated_at
+            mem.created_at, mem.updated_at, mem.status, mem.archived_at, mem.archive_reason, mem.superseded_by
         ))
 
         rowid = cursor.lastrowid
@@ -433,6 +445,7 @@ class MemoryDB:
         limit: int = 10,
         project: Optional[str] = None,
         source: Optional[str] = None,
+        include_archived: bool = False,
     ) -> list[dict]:
         """Search memories using FTS5 full-text search.
 
@@ -459,6 +472,8 @@ class MemoryDB:
         if source:
             where_clauses.append("m.source = ?")
             params.append(source)
+        if not include_archived:
+            where_clauses.append("(m.status IS NULL OR m.status = 'active')")
 
         where_clause = ""
         if where_clauses:
@@ -486,6 +501,7 @@ class MemoryDB:
         limit: int = 10,
         project: Optional[str] = None,
         source: Optional[str] = None,
+        include_archived: bool = False,
     ) -> list[dict]:
         """Search memories using vector similarity.
 
@@ -520,6 +536,8 @@ class MemoryDB:
         if source:
             where_clauses.append("m.source = ?")
             params.append(source)
+        if not include_archived:
+            where_clauses.append("(m.status IS NULL OR m.status = 'active')")
 
         where_clause = " AND ".join(where_clauses)
 
@@ -550,6 +568,7 @@ class MemoryDB:
         limit: int = 10,
         project: Optional[str] = None,
         source: Optional[str] = None,
+        include_archived: bool = False,
     ) -> list[dict]:
         """List recent memories ordered by creation date descending.
 
@@ -571,6 +590,8 @@ class MemoryDB:
         if source:
             where_clauses.append("m.source = ?")
             params.append(source)
+        if not include_archived:
+            where_clauses.append("(m.status IS NULL OR m.status = 'active')")
 
         where_clause = ""
         if where_clauses:
@@ -608,6 +629,7 @@ class MemoryDB:
         self,
         project: Optional[str] = None,
         source: Optional[str] = None,
+        include_archived: bool = False,
     ) -> int:
         """Count total memories with optional filters.
 
@@ -628,6 +650,8 @@ class MemoryDB:
         if source:
             where_clauses.append("source = ?")
             params.append(source)
+        if not include_archived:
+            where_clauses.append("(status IS NULL OR status = 'active')")
 
         where_clause = ""
         if where_clauses:
@@ -639,6 +663,46 @@ class MemoryDB:
         """, params)
 
         return cursor.fetchone()[0]
+
+    def list_memories(
+        self,
+        limit: int = 200,
+        project: Optional[str] = None,
+        category: Optional[str] = None,
+        file_path: Optional[str] = None,
+        include_archived: bool = False,
+    ) -> list[dict]:
+        """List memories with dashboard-friendly filters."""
+        where_clauses = []
+        params: list = []
+
+        if project:
+            where_clauses.append("m.project = ?")
+            params.append(project)
+        if category:
+            where_clauses.append("m.category = ?")
+            params.append(category)
+        if file_path:
+            where_clauses.append("m.file_path = ?")
+            params.append(file_path)
+        if not include_archived:
+            where_clauses.append("(m.status IS NULL OR m.status = 'active')")
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        params.append(limit)
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT m.*,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories m
+            {where_clause}
+            ORDER BY m.updated_at DESC, m.created_at DESC
+            LIMIT ?
+        """, params)
+        return [dict(row) for row in cursor.fetchall()]
 
     def set_meta(self, key: str, value: str) -> None:
         """Set a metadata key-value pair.

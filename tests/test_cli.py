@@ -21,6 +21,7 @@ def test_cli_help():
     assert "search" in result.output
     assert "details" in result.output
     assert "sessions" in result.output
+    assert "dashboard" in result.output
 
 
 def test_init_creates_vault_dir(env_home):
@@ -36,6 +37,17 @@ def test_init_creates_vault_dir(env_home):
     vault_dir = os.path.join(str(env_home), "vault")
     assert os.path.exists(vault_dir)
     assert os.path.isdir(vault_dir)
+
+
+def test_dashboard_help():
+    """Test that memory dashboard exposes a help screen."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["dashboard", "--help"])
+
+    assert result.exit_code == 0
+    assert "Launch the EchoVault terminal dashboard." in result.output
+    assert "--project" in result.output
+    assert "--include-archived" in result.output
 
 
 def test_config_set_home_persists_path(tmp_path, monkeypatch):

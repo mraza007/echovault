@@ -50,6 +50,10 @@ class Memory:
     section_anchor: str
     created_at: str
     updated_at: str
+    status: str = "active"
+    archived_at: Optional[str] = None
+    archive_reason: Optional[str] = None
+    superseded_by: Optional[str] = None
 
     @staticmethod
     def from_raw(raw: RawMemoryInput, project: str, file_path: str = "") -> Memory:

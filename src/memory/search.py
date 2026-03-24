@@ -107,6 +107,7 @@ def tiered_search(
     min_fts_results: int = 3,
     project: Optional[str] = None,
     source: Optional[str] = None,
+    include_archived: bool = False,
 ) -> list[dict]:
     """FTS-first tiered search that only calls embed when FTS results are sparse.
 
@@ -125,7 +126,13 @@ def tiered_search(
     Returns:
         Search results sorted by score descending
     """
-    fts_results = db.fts_search(query, limit=limit * 2, project=project, source=source)
+    fts_results = db.fts_search(
+        query,
+        limit=limit * 2,
+        project=project,
+        source=source,
+        include_archived=include_archived,
+    )
 
     # Normalize FTS scores to 0-1
     if fts_results:
@@ -148,7 +155,11 @@ def tiered_search(
     try:
         query_vec = embedding_provider.embed(query)
         vec_results = db.vector_search(
-            query_vec, limit=limit * 2, project=project, source=source
+            query_vec,
+            limit=limit * 2,
+            project=project,
+            source=source,
+            include_archived=include_archived,
         )
         # When lexical evidence is sparse and disagrees with the top semantic hit,
         # trust vectors more heavily. A single strong keyword match can otherwise
@@ -187,6 +198,7 @@ def hybrid_search(
     limit: int = 5,
     project: Optional[str] = None,
     source: Optional[str] = None,
+    include_archived: bool = False,
 ) -> list[dict]:
     """Run FTS5 and optionally vector search, merge results.
 
@@ -203,7 +215,13 @@ def hybrid_search(
     Returns:
         Merged and re-ranked search results
     """
-    fts_results = db.fts_search(query, limit=limit * 2, project=project, source=source)
+    fts_results = db.fts_search(
+        query,
+        limit=limit * 2,
+        project=project,
+        source=source,
+        include_archived=include_archived,
+    )
 
     if embedding_provider is None:
         # FTS-only mode: normalize scores and return directly
@@ -215,7 +233,11 @@ def hybrid_search(
 
     query_vec = embedding_provider.embed(query)
     vec_results = db.vector_search(
-        query_vec, limit=limit * 2, project=project, source=source
+        query_vec,
+        limit=limit * 2,
+        project=project,
+        source=source,
+        include_archived=include_archived,
     )
     return adjust_result_scores(
         merge_results(fts_results, vec_results, limit=limit * 2), query

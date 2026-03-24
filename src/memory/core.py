@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import uuid
+from difflib import SequenceMatcher
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,7 +24,16 @@ from typing import Optional
 from memory.config import get_memory_home, load_config
 from memory.db import DimensionMismatchError, MemoryDB
 from memory.embeddings.base import EmbeddingProvider
-from memory.markdown import read_markdown_text, write_session_memory
+from memory.markdown import (
+    SessionDocument,
+    SessionEntry,
+    assign_entry_anchors,
+    make_section_anchor,
+    parse_session_file,
+    read_markdown_text,
+    write_session_document,
+    write_session_memory,
+)
 from memory.models import Memory, MemoryDetail, RawMemoryInput
 from memory.redaction import load_memoryignore, redact
 from memory.search import hybrid_search, tiered_search
@@ -325,6 +335,7 @@ class MemoryService:
         project: Optional[str] = None,
         source: Optional[str] = None,
         use_vectors: bool = True,
+        include_archived: bool = False,
     ) -> list[dict]:
         """Search memories using hybrid FTS + vector search.
 
@@ -348,6 +359,7 @@ class MemoryService:
                 limit=limit,
                 project=project,
                 source=source,
+                include_archived=include_archived,
             )
 
         # Use tiered search: FTS first, embed only if sparse results
@@ -360,6 +372,7 @@ class MemoryService:
                     limit=limit,
                     project=project,
                     source=source,
+                    include_archived=include_archived,
                 )
             except DimensionMismatchError:
                 self._vectors_available = False
@@ -374,6 +387,7 @@ class MemoryService:
             limit=limit,
             project=project,
             source=source,
+            include_archived=include_archived,
         )
 
     def _ollama_warm(self) -> bool:
@@ -435,6 +449,7 @@ class MemoryService:
                 project=project,
                 source=source,
                 use_vectors=use_vectors,
+                include_archived=False,
             )
             if topup_recent and len(results) < limit:
                 recent = self.db.list_recent(
@@ -451,6 +466,324 @@ class MemoryService:
             results = self.db.list_recent(limit=limit, project=project, source=source)
 
         return results, total
+
+    def list_memories(
+        self,
+        *,
+        query: Optional[str] = None,
+        project: Optional[str] = None,
+        category: Optional[str] = None,
+        include_archived: bool = False,
+        limit: int = 200,
+    ) -> list[dict]:
+        """List memories for dashboard and admin flows."""
+        if query:
+            results = self.search(
+                query,
+                limit=limit,
+                project=project,
+                use_vectors=self.vectors_available,
+                include_archived=include_archived,
+            )
+            if category:
+                results = [result for result in results if result.get("category") == category]
+            return results
+        return self.db.list_memories(
+            limit=limit,
+            project=project,
+            category=category,
+            include_archived=include_archived,
+        )
+
+    def get_memory_record(self, memory_id: str) -> Optional[dict]:
+        """Return a memory with parsed details for dashboard editing."""
+        record = self._get_full_memory(memory_id)
+        if not record:
+            return None
+        detail = self.get_details(memory_id)
+        record["details"] = detail.body if detail else ""
+        return record
+
+    def get_dashboard_stats(self, project: Optional[str] = None) -> dict[str, object]:
+        """Return aggregate dashboard statistics."""
+        cursor = self.db.conn.cursor()
+        params: list[object] = []
+        project_clause = ""
+        if project:
+            project_clause = "WHERE project = ?"
+            params.append(project)
+
+        cursor.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status IS NULL OR status = 'active' THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived
+            FROM memories
+            {project_clause}
+            """,
+            params,
+        )
+        totals = dict(cursor.fetchone())
+
+        cursor.execute(
+            f"""
+            SELECT project, COUNT(*) AS count
+            FROM memories
+            {project_clause}
+            GROUP BY project
+            ORDER BY count DESC, project ASC
+            """,
+            params,
+        )
+        by_project = [dict(row) for row in cursor.fetchall()]
+
+        category_clause = "WHERE (status IS NULL OR status = 'active')"
+        category_params: list[object] = []
+        if project:
+            category_clause += " AND project = ?"
+            category_params.append(project)
+        cursor.execute(
+            f"""
+            SELECT category, COUNT(*) AS count
+            FROM memories
+            {category_clause}
+            GROUP BY category
+            ORDER BY count DESC, category ASC
+            """,
+            category_params,
+        )
+        by_category = [dict(row) for row in cursor.fetchall()]
+
+        duplicate_count = len(self.find_duplicate_candidates(project=project, limit=50))
+
+        return {
+            "totals": totals,
+            "projects": by_project,
+            "categories": by_category,
+            "duplicate_candidates": duplicate_count,
+            "recent": self.db.list_recent(limit=10, project=project, include_archived=True),
+        }
+
+    def update_memory_record(
+        self,
+        memory_id: str,
+        *,
+        title: str,
+        what: str,
+        why: Optional[str],
+        impact: Optional[str],
+        category: Optional[str],
+        tags: list[str],
+        source: Optional[str],
+        details: Optional[str],
+    ) -> dict[str, object]:
+        """Update a memory in markdown and SQLite."""
+        record = self._get_full_memory(memory_id)
+        if not record:
+            raise ValueError(f"Unknown memory: {memory_id}")
+
+        document, entry = self._load_document_entry(record)
+        entry.title = redact(title, self.ignore_patterns)
+        entry.what = redact(what, self.ignore_patterns)
+        entry.why = redact(why, self.ignore_patterns) if why else None
+        entry.impact = redact(impact, self.ignore_patterns) if impact else None
+        entry.category = category
+        entry.source = source
+        entry.details = redact(details, self.ignore_patterns) if details else None
+        entry.status = "active"
+        entry.archived_at = None
+        entry.archive_reason = None
+        entry.superseded_by = None
+
+        self._persist_document(
+            record["file_path"],
+            document,
+            tag_overrides={record["id"]: tags},
+            source_overrides={record["id"]: entry.source},
+        )
+        updated_at = datetime.now(timezone.utc).isoformat()
+        cursor = self.db.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE memories
+            SET title = ?, what = ?, why = ?, impact = ?, category = ?, tags = ?, source = ?,
+                section_anchor = ?, updated_at = ?, status = 'active',
+                archived_at = NULL, archive_reason = NULL, superseded_by = NULL
+            WHERE id = ?
+            """,
+            (
+                entry.title,
+                entry.what,
+                entry.why,
+                entry.impact,
+                entry.category,
+                json.dumps(tags),
+                entry.source,
+                entry.section_anchor,
+                updated_at,
+                record["id"],
+            ),
+        )
+        self._replace_details(record["id"], entry.details)
+        self.db.conn.commit()
+        return {"id": record["id"], "file_path": record["file_path"], "action": "updated"}
+
+    def archive_memory(
+        self,
+        memory_id: str,
+        *,
+        reason: str = "archived",
+        superseded_by: Optional[str] = None,
+    ) -> dict[str, object]:
+        """Archive a memory in markdown and SQLite."""
+        record = self._get_full_memory(memory_id)
+        if not record:
+            raise ValueError(f"Unknown memory: {memory_id}")
+
+        document, entry = self._load_document_entry(record)
+        entry.status = "archived"
+        entry.archived_at = datetime.now(timezone.utc).isoformat()
+        entry.archive_reason = reason
+        entry.superseded_by = superseded_by
+        self._persist_document(record["file_path"], document)
+
+        cursor = self.db.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE memories
+            SET status = 'archived', archived_at = ?, archive_reason = ?, superseded_by = ?, section_anchor = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (entry.archived_at, reason, superseded_by, entry.section_anchor, entry.archived_at, record["id"]),
+        )
+        self.db.conn.commit()
+        return {"id": record["id"], "file_path": record["file_path"], "action": "archived"}
+
+    def restore_memory(self, memory_id: str) -> dict[str, object]:
+        """Restore an archived memory."""
+        record = self._get_full_memory(memory_id)
+        if not record:
+            raise ValueError(f"Unknown memory: {memory_id}")
+
+        document, entry = self._load_document_entry(record)
+        entry.status = "active"
+        entry.archived_at = None
+        entry.archive_reason = None
+        entry.superseded_by = None
+        if not entry.category:
+            entry.category = record.get("category")
+        self._persist_document(record["file_path"], document)
+
+        updated_at = datetime.now(timezone.utc).isoformat()
+        cursor = self.db.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE memories
+            SET status = 'active', archived_at = NULL, archive_reason = NULL, superseded_by = NULL,
+                section_anchor = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (entry.section_anchor, updated_at, record["id"]),
+        )
+        self.db.conn.commit()
+        return {"id": record["id"], "file_path": record["file_path"], "action": "restored"}
+
+    def merge_memories(self, canonical_id: str, source_ids: list[str]) -> dict[str, object]:
+        """Merge source memories into a canonical memory and archive the sources."""
+        if canonical_id in source_ids:
+            raise ValueError("Canonical memory cannot also be a source memory")
+
+        canonical = self.get_memory_record(canonical_id)
+        if not canonical:
+            raise ValueError(f"Unknown memory: {canonical_id}")
+
+        merged_tags = set(json.loads(canonical["tags"]) if isinstance(canonical["tags"], str) else (canonical["tags"] or []))
+        merged_details_parts = [canonical.get("details", "").strip()]
+
+        for source_id in source_ids:
+            source = self.get_memory_record(source_id)
+            if not source:
+                continue
+            source_tags = json.loads(source["tags"]) if isinstance(source["tags"], str) else (source["tags"] or [])
+            merged_tags.update(source_tags)
+            if not canonical.get("why") and source.get("why"):
+                canonical["why"] = source["why"]
+            if not canonical.get("impact") and source.get("impact"):
+                canonical["impact"] = source["impact"]
+            merged_details_parts.append(
+                "\n".join(
+                    line
+                    for line in [
+                        f"Merged from: {source['title']} ({source['id'][:12]})",
+                        source.get("what", ""),
+                        source.get("details", "").strip(),
+                    ]
+                    if line
+                ).strip()
+            )
+
+        details = "\n\n".join(part for part in merged_details_parts if part)
+        self.update_memory_record(
+            canonical_id,
+            title=canonical["title"],
+            what=canonical["what"],
+            why=canonical.get("why"),
+            impact=canonical.get("impact"),
+            category=canonical.get("category"),
+            tags=sorted(merged_tags),
+            source=canonical.get("source"),
+            details=details,
+        )
+
+        for source_id in source_ids:
+            self.archive_memory(source_id, reason="merged", superseded_by=canonical_id)
+
+        return {"id": canonical_id, "merged": len(source_ids), "action": "merged"}
+
+    def find_duplicate_candidates(
+        self,
+        *,
+        project: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Find likely duplicate memories for dashboard review."""
+        memories = self.db.list_memories(limit=500, project=project, include_archived=False)
+        candidates: list[dict] = []
+        for index, left in enumerate(memories):
+            for right in memories[index + 1:]:
+                if left["project"] != right["project"]:
+                    continue
+                title_ratio = SequenceMatcher(
+                    None,
+                    self._normalize_duplicate_text(left["title"]),
+                    self._normalize_duplicate_text(right["title"]),
+                ).ratio()
+                what_ratio = SequenceMatcher(
+                    None,
+                    self._normalize_duplicate_text(left["what"]),
+                    self._normalize_duplicate_text(right["what"]),
+                ).ratio()
+                if title_ratio < 0.72 and not (
+                    self._normalize_duplicate_text(left["title"])
+                    == self._normalize_duplicate_text(right["title"])
+                ):
+                    continue
+                score = round(max(title_ratio, (title_ratio + what_ratio) / 2), 3)
+                if score < 0.75:
+                    continue
+                candidates.append(
+                    {
+                        "left_id": left["id"],
+                        "left_title": left["title"],
+                        "right_id": right["id"],
+                        "right_title": right["title"],
+                        "project": left["project"],
+                        "score": score,
+                    }
+                )
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        return candidates[:limit]
 
     def get_details(self, memory_id: str) -> Optional[MemoryDetail]:
         """Get full details for a memory by ID.
@@ -473,6 +806,127 @@ class MemoryService:
             True if deleted, False if not found
         """
         return self.db.delete_memory(memory_id)
+
+    def _normalize_duplicate_text(self, value: str) -> str:
+        return re.sub(r"\W+", " ", (value or "").lower()).strip()
+
+    def _get_full_memory(self, memory_id: str) -> Optional[dict]:
+        cursor = self.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT m.*,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories m
+            WHERE m.id LIKE ?
+            ORDER BY m.id
+            LIMIT 1
+            """,
+            (memory_id + "%",),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def _load_document_entry(self, record: dict) -> tuple[SessionDocument, SessionEntry]:
+        document = parse_session_file(record["file_path"])
+        file_rows = self.db.list_memories(
+            limit=500,
+            file_path=record["file_path"],
+            include_archived=True,
+        )
+        rows_by_anchor = {row["section_anchor"]: row for row in file_rows}
+        rows_by_id = {row["id"]: row for row in file_rows}
+
+        for entry in document.entries:
+            if entry.id and entry.id in rows_by_id:
+                continue
+            row = rows_by_anchor.get(entry.section_anchor)
+            if row:
+                entry.id = row["id"]
+                if row.get("status"):
+                    entry.status = row["status"]
+                if row.get("archived_at"):
+                    entry.archived_at = row["archived_at"]
+                if row.get("archive_reason"):
+                    entry.archive_reason = row["archive_reason"]
+                if row.get("superseded_by"):
+                    entry.superseded_by = row["superseded_by"]
+
+        for entry in document.entries:
+            if entry.id == record["id"]:
+                return document, entry
+
+        for entry in document.entries:
+            if entry.section_anchor == record["section_anchor"]:
+                entry.id = record["id"]
+                return document, entry
+
+        raise ValueError(f"Unable to locate markdown entry for memory {record['id']}")
+
+    def _persist_document(
+        self,
+        file_path: str,
+        document: SessionDocument,
+        *,
+        tag_overrides: Optional[dict[str, list[str]]] = None,
+        source_overrides: Optional[dict[str, Optional[str]]] = None,
+    ) -> None:
+        assign_entry_anchors(document.entries)
+        file_rows = self.db.list_memories(limit=500, file_path=file_path, include_archived=True)
+        tags: set[str] = set()
+        sources: set[str] = set()
+        rows_by_id = {row["id"]: row for row in file_rows}
+        for entry in document.entries:
+            if entry.id and tag_overrides and entry.id in tag_overrides:
+                tags.update(tag_overrides[entry.id])
+            elif entry.id and entry.id in rows_by_id:
+                row = rows_by_id[entry.id]
+                row_tags = row["tags"]
+                if isinstance(row_tags, str):
+                    try:
+                        tags.update(json.loads(row_tags))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                elif isinstance(row_tags, list):
+                    tags.update(row_tags)
+            source = entry.source
+            if entry.id and source_overrides and entry.id in source_overrides:
+                source = source_overrides[entry.id]
+            if source:
+                sources.add(source)
+        write_session_document(file_path, document, tags=sorted(tags), sources=sorted(sources))
+        self._sync_document_rows(document)
+
+    def _replace_details(self, memory_id: str, details: Optional[str]) -> None:
+        cursor = self.db.conn.cursor()
+        cursor.execute("DELETE FROM memory_details WHERE memory_id = ?", (memory_id,))
+        if details:
+            cursor.execute(
+                "INSERT INTO memory_details (memory_id, body) VALUES (?, ?)",
+                (memory_id, details),
+            )
+
+    def _sync_document_rows(self, document: SessionDocument) -> None:
+        cursor = self.db.conn.cursor()
+        for entry in document.entries:
+            if not entry.id:
+                continue
+            cursor.execute(
+                """
+                UPDATE memories
+                SET section_anchor = ?, category = ?, source = ?, status = ?, archived_at = ?, archive_reason = ?, superseded_by = ?
+                WHERE id = ?
+                """,
+                (
+                    entry.section_anchor,
+                    entry.category,
+                    entry.source,
+                    entry.status,
+                    entry.archived_at,
+                    entry.archive_reason,
+                    entry.superseded_by,
+                    entry.id,
+                ),
+            )
 
     def reindex(self, progress_callback=None) -> dict:
         """Rebuild the vector table with current embedding provider.
@@ -533,6 +987,7 @@ class MemoryService:
         "Bugs Fixed": "bug",
         "Context": "context",
         "Learnings": "learning",
+        "Archived": "__archived__",
     }
 
     @staticmethod
@@ -586,6 +1041,7 @@ class MemoryService:
         memories: list[dict] = []
         current_category: Optional[str] = None
         anchor_counts: dict[str, int] = {}
+        current_status = "active"
 
         lines = content.split("\n")
         i = 0
@@ -595,6 +1051,7 @@ class MemoryService:
             if line.startswith("## "):
                 heading = line[3:].strip()
                 current_category = cls._HEADING_TO_CATEGORY.get(heading)
+                current_status = "archived" if current_category == "__archived__" else "active"
 
             if line.startswith("### "):
                 title = line[4:].strip()
@@ -633,7 +1090,7 @@ class MemoryService:
 
                     i += 1
 
-                if title and what:
+                if title and what and current_status != "archived":
                     base_anchor = cls._make_section_anchor(title)
                     occurrence = anchor_counts.get(base_anchor, 0) + 1
                     anchor_counts[base_anchor] = occurrence
