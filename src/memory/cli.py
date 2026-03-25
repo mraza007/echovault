@@ -45,6 +45,7 @@ def _redact_api_keys(data: dict) -> dict:
 
 
 @click.group()
+@click.version_option(package_name="echovault", prog_name="echovault")
 def main():
     """Memory — local memory for coding agents."""
     pass
