@@ -22,6 +22,7 @@ from memory.core import MemoryService
 from memory.dashboard.editor import edit_memory
 from memory.dashboard.widgets.command_bar import CommandBar
 from memory.dashboard.widgets.confirm import ConfirmModal, HelpModal
+from memory.dashboard.widgets.lazy_input import LazyInput
 from memory.dashboard.widgets.header_bar import HeaderBar
 from memory.dashboard.widgets.memory_table import VimDataTable
 from memory.models import RawMemoryInput
@@ -196,22 +197,11 @@ class MemoryDashboardApp(App[None]):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("1", "show_overview", "Overview", show=False),
-        Binding("2", "show_memories", "Memories", show=False),
-        Binding("3", "show_review", "Review", show=False),
-        Binding("4", "show_operations", "Ops", show=False),
-        Binding("r", "refresh_all", "Refresh", show=False),
-        Binding("colon", "open_command", "Command", show=False),
-        Binding("slash", "focus_search", "Search", show=False),
-        Binding("e", "edit_memory", "Edit", show=False),
-        Binding("n", "new_memory", "New", show=False),
-        Binding("a", "archive_action", "Archive", show=False),
-        Binding("i", "run_import", "Import", show=False),
-        Binding("R", "run_reindex", "Reindex", show=False),
-        Binding("m", "merge_pair", "Merge", show=False),
-        Binding("x", "keep_separate", "Keep Separate", show=False),
-        Binding("question_mark", "show_help", "Help", show=False),
+        Binding("escape", "blur_inputs", "Unfocus", priority=True),
+        Binding("1", "show_overview", "Overview", priority=True),
+        Binding("2", "show_memories", "Memories", priority=True),
+        Binding("3", "show_review", "Review", priority=True),
+        Binding("4", "show_operations", "Ops", priority=True),
     ]
 
     active_mode: reactive[str] = reactive("overview")
@@ -257,13 +247,13 @@ class MemoryDashboardApp(App[None]):
             # Memories
             with Vertical(id="memories-panel"):
                 with Horizontal(id="mem-filter-bar"):
-                    yield Input(placeholder="Search memories", id="mem-search")
-                    yield Input(
+                    yield LazyInput(placeholder="Search memories", id="mem-search")
+                    yield LazyInput(
                         placeholder="Project",
                         id="mem-project",
                         value=self.initial_project,
                     )
-                    yield Input(placeholder="Category", id="mem-category")
+                    yield LazyInput(placeholder="Category", id="mem-category")
                     yield Checkbox(
                         "Archived",
                         id="mem-archived",
@@ -319,6 +309,7 @@ class MemoryDashboardApp(App[None]):
         header.mode = "overview"
         self.query_one(CommandBar).hints = _MODE_HINTS["overview"]
         self._refresh_overview()
+        # LazyInput starts deactivated, no explicit disable needed
 
     # --- Mode switching ---
 
@@ -357,7 +348,10 @@ class MemoryDashboardApp(App[None]):
     def action_focus_search(self) -> None:
         if self.active_mode != "memories":
             self.active_mode = "memories"
-        self.query_one("#mem-search", Input).focus()
+        self._search_active = True
+        for iid in ("#mem-search", "#mem-project", "#mem-category"):
+            self.query_one(iid, LazyInput).activate()
+        self.query_one("#mem-search", LazyInput).activate()
 
     def action_open_command(self) -> None:
         self.query_one(CommandBar).activate_command()
@@ -374,11 +368,45 @@ class MemoryDashboardApp(App[None]):
             cmd_bar.deactivate_command()
             self._dispatch_command(command)
 
-    def on_key(self, event) -> None:
+    def action_blur_inputs(self) -> None:
+        self._search_active = False
         cmd_bar = self.query_one(CommandBar)
-        if cmd_bar.is_command_active and event.key == "escape":
+        if cmd_bar.is_command_active:
             cmd_bar.deactivate_command()
+        for iid in ("#mem-search", "#mem-project", "#mem-category"):
+            self.query_one(iid, LazyInput).deactivate()
+        self.set_focus(None)
+
+    _search_active = False
+
+    def on_key(self, event) -> None:
+        # If user is actively typing in search (pressed / first), let Input handle it
+        if self._search_active and isinstance(self.focused, Input):
+            return
+        # Otherwise, route single-char keys to actions
+        key_actions = {
+            "q": self.action_quit,
+            "r": self.action_refresh_all,
+            "e": self.action_edit_memory,
+            "n": self.action_new_memory,
+            "a": self.action_archive_action,
+            "i": self.action_run_import,
+            "m": self.action_merge_pair,
+            "x": self.action_keep_separate,
+        }
+        action = key_actions.get(event.key)
+        if action:
             event.prevent_default()
+            action()
+        elif event.key == "slash":
+            event.prevent_default()
+            self.action_focus_search()
+        elif event.key == "colon":
+            event.prevent_default()
+            self.action_open_command()
+        elif event.key == "question_mark":
+            event.prevent_default()
+            self.action_show_help()
 
     def _dispatch_command(self, command: str) -> None:
         parts = command.split(None, 1)
@@ -431,9 +459,9 @@ class MemoryDashboardApp(App[None]):
         self, event: VimDataTable.RowHighlighted
     ) -> None:
         if event.data_table.id == "mem-table" and event.row_key is not None:
-            self._schedule_detail(str(event.row_key))
+            self._schedule_detail(str(event.row_key.value))
         elif event.data_table.id == "review-table" and event.row_key is not None:
-            self._show_pair(str(event.row_key))
+            self._show_pair(str(event.row_key.value))
 
     # --- Data operations ---
 
@@ -644,7 +672,7 @@ class MemoryDashboardApp(App[None]):
         if table.row_count == 0:
             return None
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-        return str(row_key) if row_key is not None else None
+        return str(row_key.value) if row_key is not None else None
 
     def _selected_pair(self) -> Optional[dict]:
         table = self.query_one("#review-table", VimDataTable)
@@ -653,7 +681,7 @@ class MemoryDashboardApp(App[None]):
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         if row_key is None:
             return None
-        idx = int(str(row_key).split("-")[-1])
+        idx = int(str(row_key.value).split("-")[-1])
         if 0 <= idx < len(self.duplicate_rows):
             return self.duplicate_rows[idx]
         return None

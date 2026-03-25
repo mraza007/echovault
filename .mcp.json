@@ -2,7 +2,9 @@
   "mcpServers": {
     "echovault": {
       "command": "memory",
-      "args": ["mcp"],
+      "args": [
+        "mcp"
+      ],
       "type": "stdio"
     }
   }
