@@ -475,6 +475,7 @@ class MemoryService:
         category: Optional[str] = None,
         include_archived: bool = False,
         limit: int = 200,
+        use_vectors: bool = False,
     ) -> list[dict]:
         """List memories for dashboard and admin flows."""
         if query:
@@ -482,7 +483,7 @@ class MemoryService:
                 query,
                 limit=limit,
                 project=project,
-                use_vectors=self.vectors_available,
+                use_vectors=use_vectors,
                 include_archived=include_archived,
             )
             if category:
@@ -504,7 +505,12 @@ class MemoryService:
         record["details"] = detail.body if detail else ""
         return record
 
-    def get_dashboard_stats(self, project: Optional[str] = None) -> dict[str, object]:
+    def get_dashboard_stats(
+        self,
+        project: Optional[str] = None,
+        *,
+        include_duplicate_candidates: bool = False,
+    ) -> dict[str, object]:
         """Return aggregate dashboard statistics."""
         cursor = self.db.conn.cursor()
         params: list[object] = []
@@ -555,7 +561,9 @@ class MemoryService:
         )
         by_category = [dict(row) for row in cursor.fetchall()]
 
-        duplicate_count = len(self.find_duplicate_candidates(project=project, limit=50))
+        duplicate_count = 0
+        if include_duplicate_candidates:
+            duplicate_count = len(self.find_duplicate_candidates(project=project, limit=50))
 
         return {
             "totals": totals,

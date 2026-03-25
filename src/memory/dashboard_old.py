@@ -44,10 +44,24 @@ class MemoryDashboardApp(App[None]):
         layout: vertical;
     }
 
-    #overview-content, #detail-panel, #duplicate-detail, #operations-log {
+    #overview-content, #detail-panel, #duplicate-detail, #operations-log, #editor-shell {
         border: round $surface;
         padding: 1 2;
         height: 1fr;
+    }
+
+    #memories-layout, #review-layout {
+        height: 1fr;
+    }
+
+    #memory-browser {
+        width: 7fr;
+        min-width: 72;
+    }
+
+    #memory-sidepane {
+        width: 5fr;
+        min-width: 52;
     }
 
     #memory-actions, #duplicate-actions, #operations-actions {
@@ -55,12 +69,22 @@ class MemoryDashboardApp(App[None]):
         padding: 1 0;
     }
 
-    #memory-table, #duplicate-table {
+    #memory-table, #duplicate-table, #memory-side-tabs {
         height: 1fr;
     }
 
     .filters {
         height: auto;
+        padding-bottom: 1;
+    }
+
+    .filter-field {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    .filter-field Checkbox {
+        margin-top: 1;
     }
 
     .editor {
@@ -69,6 +93,45 @@ class MemoryDashboardApp(App[None]):
 
     .column {
         width: 1fr;
+    }
+
+    .section-title {
+        text-style: bold;
+        color: $accent;
+        padding-bottom: 1;
+    }
+
+    .field-label {
+        color: $text-muted;
+        padding-bottom: 0;
+    }
+
+    .memory-meta {
+        color: $text-muted;
+        padding-bottom: 1;
+    }
+
+    #memory-summary {
+        height: auto;
+        color: $text-muted;
+        padding-bottom: 1;
+    }
+
+    #detail-panel {
+        min-height: 12;
+    }
+
+    #editor-shell {
+        height: 1fr;
+    }
+
+    #details-pane, #editor-pane {
+        padding: 0 0 1 0;
+    }
+
+    #editor-actions, #detail-actions {
+        height: auto;
+        padding-top: 1;
     }
     """
 
@@ -104,6 +167,11 @@ class MemoryDashboardApp(App[None]):
         self.ignored_pairs: set[tuple[str, str]] = set()
         self.editing_memory_id: Optional[str] = None
         self.operation_lines: list[str] = []
+        self.filter_refresh_generation = 0
+        self.detail_refresh_generation = 0
+        self.duplicate_cache_key: Optional[str] = None
+        self.duplicate_cache_rows: list[dict] = []
+        self.record_cache: dict[str, dict] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -111,40 +179,74 @@ class MemoryDashboardApp(App[None]):
             with TabPane("Overview", id="overview"):
                 yield Static(id="overview-content")
             with TabPane("Memories", id="memories"):
-                with Horizontal():
-                    with Vertical(classes="column"):
+                with Horizontal(id="memories-layout"):
+                    with Vertical(id="memory-browser"):
+                        yield Static("Browse memories", classes="section-title")
                         with Horizontal(classes="filters"):
-                            yield Input(placeholder="Search memories", id="search-input")
-                            yield Input(value=self.initial_project, placeholder="Project", id="project-filter")
-                            yield Input(placeholder="Category", id="category-filter")
-                            yield Checkbox("Archived", value=self.initial_include_archived, id="archived-toggle")
+                            with Vertical(classes="filter-field"):
+                                yield Static("Search", classes="field-label")
+                                yield Input(placeholder="Search memories", id="search-input")
+                            with Vertical(classes="filter-field"):
+                                yield Static("Project", classes="field-label")
+                                yield Input(value=self.initial_project, placeholder="All projects", id="project-filter")
+                            with Vertical(classes="filter-field"):
+                                yield Static("Category", classes="field-label")
+                                yield Input(placeholder="All categories", id="category-filter")
+                            with Vertical(classes="filter-field"):
+                                yield Static("Options", classes="field-label")
+                                yield Checkbox("Show archived", value=self.initial_include_archived, id="archived-toggle")
+                        yield Static(id="memory-summary")
                         yield DataTable(id="memory-table")
                         with Horizontal(id="memory-actions"):
                             yield Button("New", id="new-memory")
-                            yield Button("Load Selected", id="load-memory")
-                            yield Button("Save", id="save-memory", variant="primary")
+                            yield Button("Edit Selected", id="load-memory")
                             yield Button("Archive / Restore", id="archive-memory", variant="warning")
-                    with Vertical(classes="column editor"):
-                        yield Input(placeholder="Title", id="title-input")
-                        yield Input(placeholder="Project", id="editor-project-input")
-                        yield Input(placeholder="Category", id="editor-category-input")
-                        yield Input(placeholder="Tags (comma separated)", id="tags-input")
-                        yield Input(placeholder="Source", id="source-input")
-                        yield Input(placeholder="What", id="what-input")
-                        yield Input(placeholder="Why", id="why-input")
-                        yield Input(placeholder="Impact", id="impact-input")
-                        yield TextArea(id="details-input")
-                        yield Static(id="detail-panel")
+                    with Vertical(id="memory-sidepane"):
+                        with TabbedContent(id="memory-side-tabs", initial="details-pane"):
+                            with TabPane("Details", id="details-pane"):
+                                yield Static("Selected memory", classes="section-title")
+                                yield Static(id="detail-panel")
+                                with Horizontal(id="detail-actions"):
+                                    yield Button("Edit Selected", id="detail-load-memory")
+                                    yield Button("New Memory", id="detail-new-memory")
+                            with TabPane("Editor", id="editor-pane"):
+                                yield Static("Create or edit memory", classes="section-title")
+                                with Vertical(id="editor-shell", classes="editor"):
+                                    yield Static("Title", classes="field-label")
+                                    yield Input(placeholder="Short title", id="title-input")
+                                    yield Static("Project", classes="field-label")
+                                    yield Input(placeholder="Project name", id="editor-project-input")
+                                    yield Static("Category", classes="field-label")
+                                    yield Input(placeholder="decision | bug | pattern | context | learning", id="editor-category-input")
+                                    yield Static("Tags", classes="field-label")
+                                    yield Input(placeholder="Comma separated tags", id="tags-input")
+                                    yield Static("Source", classes="field-label")
+                                    yield Input(placeholder="Agent or source", id="source-input")
+                                    yield Static("What", classes="field-label")
+                                    yield Input(placeholder="What happened", id="what-input")
+                                    yield Static("Why", classes="field-label")
+                                    yield Input(placeholder="Why it matters", id="why-input")
+                                    yield Static("Impact", classes="field-label")
+                                    yield Input(placeholder="Impact or consequences", id="impact-input")
+                                    yield Static("Details", classes="field-label")
+                                    yield TextArea(id="details-input")
+                                with Horizontal(id="editor-actions"):
+                                    yield Button("Save", id="save-memory", variant="primary")
+                                    yield Button("Reset", id="editor-reset")
             with TabPane("Review Queue", id="review"):
-                with Horizontal():
+                with Horizontal(id="review-layout"):
                     with Vertical(classes="column"):
+                        yield Static("Duplicate review queue", classes="section-title")
                         yield DataTable(id="duplicate-table")
                         with Horizontal(id="duplicate-actions"):
                             yield Button("Merge Right into Left", id="merge-duplicates", variant="primary")
                             yield Button("Archive Right", id="archive-duplicate", variant="warning")
                             yield Button("Keep Separate", id="ignore-duplicate")
-                    yield Static(id="duplicate-detail", classes="column")
+                    with Vertical(classes="column"):
+                        yield Static("Compare selected pair", classes="section-title")
+                        yield Static(id="duplicate-detail", classes="column")
             with TabPane("Operations", id="operations"):
+                yield Static("Maintenance operations", classes="section-title")
                 with Horizontal(id="operations-actions"):
                     yield Button("Import", id="run-import", variant="primary")
                     yield Button("Reindex", id="run-reindex", variant="primary")
@@ -163,7 +265,8 @@ class MemoryDashboardApp(App[None]):
         duplicate_table.zebra_stripes = True
         duplicate_table.add_columns("Left", "Right", "Project", "Score")
 
-        self.action_refresh_all()
+        self._refresh_overview()
+        self._refresh_memories()
         self.action_new_memory()
 
     def action_show_overview(self) -> None:
@@ -192,7 +295,8 @@ class MemoryDashboardApp(App[None]):
         self.query_one("#why-input", Input).value = ""
         self.query_one("#impact-input", Input).value = ""
         self.query_one("#details-input", TextArea).text = ""
-        self.query_one("#detail-panel", Static).update("Creating a new memory.")
+        self.query_one("#detail-panel", Static).update("Select a memory to inspect it, or start a new one in the editor.")
+        self.query_one("#memory-side-tabs", TabbedContent).active = "editor-pane"
         self.action_show_memories()
 
     def action_save_memory(self) -> None:
@@ -211,26 +315,31 @@ class MemoryDashboardApp(App[None]):
         self._run_reindex()
 
     def action_refresh_all(self) -> None:
+        self.record_cache = {}
+        self._invalidate_duplicate_cache()
         self._refresh_overview()
         self._refresh_memories()
-        self._refresh_duplicates()
+        self._refresh_duplicates(force=True)
         self._append_log("Refreshed dashboard.")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id in {"search-input", "project-filter", "category-filter"}:
-            self._refresh_memories()
-            self._refresh_duplicates()
-            self._refresh_overview()
+            if event.input.id == "project-filter":
+                self._invalidate_duplicate_cache()
+            self._schedule_memory_refresh()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "archived-toggle":
-            self._refresh_memories()
+            self._schedule_memory_refresh()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         handlers = {
             "new-memory": self.action_new_memory,
             "load-memory": self._load_selected_memory,
+            "detail-load-memory": self._load_selected_memory,
+            "detail-new-memory": self.action_new_memory,
             "save-memory": self._save_editor_memory,
+            "editor-reset": self.action_new_memory,
             "archive-memory": self._archive_or_restore_selected,
             "merge-duplicates": self._merge_selected_pair,
             "archive-duplicate": self._archive_duplicate_right,
@@ -246,17 +355,34 @@ class MemoryDashboardApp(App[None]):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "memory-table":
             memory_id = str(event.row_key)
-            self._update_memory_detail(memory_id)
+            self._schedule_memory_detail_refresh(memory_id)
         elif event.data_table.id == "duplicate-table":
-            self._update_duplicate_detail(str(event.row_key))
+            self._schedule_duplicate_detail_refresh(str(event.row_key))
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        pane_id = event.pane.id if event.pane else ""
+        if pane_id == "overview":
+            self._refresh_overview()
+        elif pane_id == "memories":
+            self._refresh_memories()
+        elif pane_id == "review":
+            self._refresh_duplicates()
 
     def _refresh_overview(self) -> None:
-        stats = self.service.get_dashboard_stats(project=self._project_filter() or None)
+        project = self._project_filter() or None
+        stats = self.service.get_dashboard_stats(
+            project=project,
+            include_duplicate_candidates=False,
+        )
+        if self.duplicate_cache_key == (project or "__all__"):
+            duplicate_summary = str(len(self.duplicate_cache_rows))
+        else:
+            duplicate_summary = "open Review Queue to compute"
         lines = [
             f"Total memories: {stats['totals'].get('total', 0)}",
             f"Active: {stats['totals'].get('active', 0)}",
             f"Archived: {stats['totals'].get('archived', 0)}",
-            f"Duplicate candidates: {stats['duplicate_candidates']}",
+            f"Duplicate candidates: {duplicate_summary}",
             "",
             "Projects:",
         ]
@@ -279,10 +405,17 @@ class MemoryDashboardApp(App[None]):
             category=self.query_one("#category-filter", Input).value.strip() or None,
             include_archived=self.query_one("#archived-toggle", Checkbox).value,
             limit=300,
+            use_vectors=False,
         )
         self.memory_rows = {record["id"]: record for record in records}
         table = self.query_one("#memory-table", DataTable)
         table.clear()
+        project = self._project_filter() or "all projects"
+        category = self.query_one("#category-filter", Input).value.strip() or "all categories"
+        archived = "including archived" if self.query_one("#archived-toggle", Checkbox).value else "active only"
+        self.query_one("#memory-summary", Static).update(
+            f"{len(records)} memories shown for {project} • {category} • {archived}"
+        )
         for record in records:
             table.add_row(
                 record["title"],
@@ -297,13 +430,18 @@ class MemoryDashboardApp(App[None]):
         else:
             self.query_one("#detail-panel", Static).update("No memories found.")
 
-    def _refresh_duplicates(self) -> None:
+    def _refresh_duplicates(self, *, force: bool = False) -> None:
         project = self._project_filter() or None
-        rows = [
-            row
-            for row in self.service.find_duplicate_candidates(project=project, limit=100)
-            if (row["left_id"], row["right_id"]) not in self.ignored_pairs
-        ]
+        cache_key = project or "__all__"
+        if force or self.duplicate_cache_key != cache_key:
+            rows = [
+                row
+                for row in self.service.find_duplicate_candidates(project=project, limit=100)
+                if (row["left_id"], row["right_id"]) not in self.ignored_pairs
+            ]
+            self.duplicate_cache_key = cache_key
+            self.duplicate_cache_rows = rows
+        rows = self.duplicate_cache_rows
         self.duplicate_rows = rows
         table = self.query_one("#duplicate-table", DataTable)
         table.clear()
@@ -341,22 +479,24 @@ class MemoryDashboardApp(App[None]):
         return None
 
     def _update_memory_detail(self, memory_id: str) -> None:
-        record = self.service.get_memory_record(memory_id)
+        record = self._get_cached_record(memory_id)
         if not record:
             self.query_one("#detail-panel", Static).update("No memory selected.")
             return
         self.query_one("#detail-panel", Static).update(
             "\n".join(
                 [
+                    record["title"],
+                    f"Project: {record['project']}  |  Category: {record.get('category') or 'uncategorized'}",
+                    f"Status: {record.get('status') or 'active'}  |  Source: {record.get('source') or 'n/a'}",
+                    f"Tags: {_stringify_tags(record.get('tags')) or 'none'}",
                     f"ID: {record['id'][:12]}",
-                    f"Project: {record['project']}",
-                    f"Category: {record.get('category') or ''}",
-                    f"Status: {record.get('status') or 'active'}",
-                    f"Source: {record.get('source') or ''}",
-                    f"Tags: {_stringify_tags(record.get('tags'))}",
                     "",
-                    record["what"],
-                    record.get("details", ""),
+                    "What",
+                    record["what"] or "No summary provided.",
+                    "",
+                    "Details",
+                    record.get("details", "") or "No details saved for this memory.",
                 ]
             ).strip()
         )
@@ -364,8 +504,8 @@ class MemoryDashboardApp(App[None]):
     def _update_duplicate_detail(self, pair_key: str) -> None:
         index = int(pair_key.split("-")[-1])
         pair = self.duplicate_rows[index]
-        left = self.service.get_memory_record(pair["left_id"])
-        right = self.service.get_memory_record(pair["right_id"])
+        left = self._get_cached_record(pair["left_id"])
+        right = self._get_cached_record(pair["right_id"])
         detail = [
             f"Project: {pair['project']}",
             f"Score: {pair['score']:.2f}",
@@ -382,7 +522,7 @@ class MemoryDashboardApp(App[None]):
         memory_id = self._selected_memory_id()
         if not memory_id:
             return
-        record = self.service.get_memory_record(memory_id)
+        record = self._get_cached_record(memory_id)
         if not record:
             return
         self.editing_memory_id = record["id"]
@@ -396,6 +536,7 @@ class MemoryDashboardApp(App[None]):
         self.query_one("#impact-input", Input).value = record.get("impact") or ""
         self.query_one("#details-input", TextArea).text = record.get("details", "")
         self._update_memory_detail(memory_id)
+        self.query_one("#memory-side-tabs", TabbedContent).active = "editor-pane"
 
     def _save_editor_memory(self) -> None:
         title = self.query_one("#title-input", Input).value.strip()
@@ -448,6 +589,7 @@ class MemoryDashboardApp(App[None]):
         if not memory_id:
             return
         record = self.service.get_memory_record(memory_id)
+        self.record_cache.pop(memory_id, None)
         if not record:
             return
         try:
@@ -488,7 +630,8 @@ class MemoryDashboardApp(App[None]):
             return
         self.ignored_pairs.add((pair["left_id"], pair["right_id"]))
         self._append_log(f"Ignored pair: {pair['left_title']} / {pair['right_title']}")
-        self._refresh_duplicates()
+        self._invalidate_duplicate_cache()
+        self._refresh_duplicates(force=True)
 
     def _run_import(self) -> None:
         try:
@@ -516,3 +659,47 @@ class MemoryDashboardApp(App[None]):
 
     def _project_filter(self) -> str:
         return self.query_one("#project-filter", Input).value.strip()
+
+    def _schedule_memory_refresh(self) -> None:
+        self.filter_refresh_generation += 1
+        generation = self.filter_refresh_generation
+
+        def run_refresh() -> None:
+            if generation != self.filter_refresh_generation:
+                return
+            self._refresh_memories()
+
+        self.set_timer(0.12, run_refresh)
+
+    def _invalidate_duplicate_cache(self) -> None:
+        self.duplicate_cache_key = None
+        self.duplicate_cache_rows = []
+
+    def _schedule_memory_detail_refresh(self, memory_id: str) -> None:
+        self.detail_refresh_generation += 1
+        generation = self.detail_refresh_generation
+
+        def run_refresh() -> None:
+            if generation != self.detail_refresh_generation:
+                return
+            self._update_memory_detail(memory_id)
+
+        self.set_timer(0.03, run_refresh)
+
+    def _schedule_duplicate_detail_refresh(self, pair_key: str) -> None:
+        self.detail_refresh_generation += 1
+        generation = self.detail_refresh_generation
+
+        def run_refresh() -> None:
+            if generation != self.detail_refresh_generation:
+                return
+            self._update_duplicate_detail(pair_key)
+
+        self.set_timer(0.03, run_refresh)
+
+    def _get_cached_record(self, memory_id: str) -> Optional[dict]:
+        if memory_id not in self.record_cache:
+            record = self.service.get_memory_record(memory_id)
+            if record:
+                self.record_cache[memory_id] = record
+        return self.record_cache.get(memory_id)

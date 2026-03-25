@@ -42,14 +42,14 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 **Obsidian-compatible** — Session files are valid Markdown with YAML frontmatter. Point Obsidian at `~/.memory/vault/` and browse your agent's memory visually.
 
-**Terminal dashboard** — Launch `memory dashboard` for a full-screen local TUI with search, stats, archive/restore flows, duplicate review, import, and reindex controls.
+**Terminal dashboard** — Launch `memory dashboard` for a k9s-style keyboard-driven TUI with vim navigation, `$EDITOR` integration, search, stats, duplicate review, and command palette.
 
 ## Install
 
 Install the latest stable release:
 
 ```bash
-pip install git+https://github.com/mraza007/echovault.git@v0.2.0
+pip install git+https://github.com/mraza007/echovault.git@v0.3.0
 memory init
 memory setup claude-code   # or: cursor, codex, opencode
 ```
@@ -177,36 +177,42 @@ For long details, use `--details-file notes.md`. To scaffold structured details 
 
 ### Terminal dashboard
 
-EchoVault ships with a full-screen local terminal dashboard:
+EchoVault ships with a full-screen terminal dashboard with k9s-style keyboard-driven navigation:
 
 ```bash
 memory dashboard
+memory dashboard --project my-project
 ```
 
 Use it to:
 
-- browse memories across the whole vault
-- filter by project, category, and archived state
-- inspect full memory details without leaving the terminal
-- create and edit memories
-- archive or restore memories safely
-- review duplicate candidates and merge them
-- run `memory import` and `memory reindex` from one place
+- browse memories across the whole vault with search, project, and category filters
+- preview memory details inline (vertical split: table on top, detail below)
+- edit memories in `$EDITOR` (vim) as YAML files
+- archive or restore memories with confirmation dialogs
+- review duplicate candidates side-by-side and merge them
+- run import, reindex, and refresh from the operations panel
+- use the `:` command palette for power-user operations
 
-Helpful shortcuts:
+Keybindings:
 
-- `1` overview
-- `2` memories
-- `3` duplicate review
-- `4` operations
-- `/` focus search
-- `n` new memory
-- `s` save memory
-- `a` archive or restore selected memory
-- `m` merge selected duplicate pair
-- `i` import memories
-- `R` reindex vectors
-- `q` quit
+| Key | Action |
+|-----|--------|
+| `1` `2` `3` `4` | Switch panels: Overview, Memories, Review, Ops |
+| `j` / `k` | Navigate rows (vim-style) |
+| `g` / `G` | Jump to first / last row |
+| `/` | Focus search |
+| `e` | Edit selected memory in $EDITOR |
+| `n` | New memory in $EDITOR |
+| `a` | Archive or restore |
+| `m` | Merge duplicate pair |
+| `x` | Keep duplicate pair separate |
+| `i` | Import from vault |
+| `R` | Reindex vectors |
+| `r` | Refresh all data |
+| `:` | Command palette |
+| `?` | Help overlay |
+| `q` | Quit |
 
 ## How it works
 

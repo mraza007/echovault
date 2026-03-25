@@ -6,6 +6,27 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-25
+
+### Changed
+- Redesigned the terminal dashboard with k9s-style keyboard-driven navigation — number keys switch between panels instantly, no more tab switching.
+- Replaced horizontal split layout with vertical table-on-top, detail-preview-on-bottom for the memories view.
+- Memory editing now opens `$EDITOR` (defaults to vim) with the memory as a YAML file instead of an in-app form editor.
+- Added vim-style `j`/`k`/`g`/`G` navigation in all data tables.
+- Added `:` command palette for power-user operations (`:import`, `:reindex`, `:project <name>`, etc.).
+- Added `?` help overlay showing all keybindings.
+- Added confirmation dialogs for destructive actions (merge, archive).
+- Replaced operations buttons with keyboard shortcut hints and `RichLog` for timestamped operation output.
+- Operation feedback now uses toast notifications instead of requiring a switch to the operations panel.
+- Added custom header bar showing current mode, active project filter, and memory count.
+- Added context-sensitive key hints in the bottom command bar that update per panel.
+- Refactored dashboard from a single 706-line file into a modular `dashboard/` package (app, widgets, editor).
+
+## [0.2.1] - 2026-03-24
+
+### Changed
+- Bumped version for post-release fixes.
+
 ## [0.2.0] - 2026-03-24
 
 ### Added
