@@ -210,6 +210,7 @@ fn draw_memories(f: &mut Frame, app: &App, area: Rect) {
     let selected_style = Style::default().bg(Color::Rgb(50, 50, 80)).add_modifier(Modifier::BOLD);
     let header = Row::new(vec![
         Cell::from("Title"),
+        Cell::from("Project"),
         Cell::from("Category"),
         Cell::from("Status"),
         Cell::from("Updated"),
@@ -231,6 +232,7 @@ fn draw_memories(f: &mut Frame, app: &App, area: Rect) {
             };
             Row::new(vec![
                 Cell::from(m.title.clone()),
+                Cell::from(m.project.clone()),
                 Cell::from(m.category.clone().unwrap_or_default()),
                 Cell::from(m.status.clone().unwrap_or_else(|| "active".to_string())),
                 Cell::from(m.updated_at[..m.updated_at.len().min(10)].to_string()),
@@ -242,10 +244,11 @@ fn draw_memories(f: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Percentage(50),
+            Constraint::Percentage(40),
             Constraint::Percentage(15),
-            Constraint::Percentage(10),
-            Constraint::Percentage(15),
+            Constraint::Percentage(12),
+            Constraint::Percentage(8),
+            Constraint::Percentage(12),
         ],
     )
     .header(header)
