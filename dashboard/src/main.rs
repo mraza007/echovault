@@ -33,6 +33,13 @@ struct Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Write panics to a log file so we can debug TUI crashes
+    std::panic::set_hook(Box::new(|info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        eprintln!("Dashboard panicked: {}", info);
+    }));
+
     let cli = Cli::parse();
 
     let memory_home = cli

@@ -497,7 +497,6 @@ def sessions(limit, project):
 def dashboard(project, include_archived):
     """Launch the EchoVault terminal dashboard."""
     import shutil
-    import subprocess
 
     binary = shutil.which("memory-dashboard")
     if binary is None:
@@ -513,8 +512,8 @@ def dashboard(project, include_archived):
         cmd.append("--include-archived")
 
     memory_home = get_memory_home()
-    env = {**os.environ, "MEMORY_HOME": memory_home}
-    raise SystemExit(subprocess.call(cmd, env=env))
+    os.environ["MEMORY_HOME"] = memory_home
+    os.execvp(binary, cmd)
 
 
 def _resolve_config_dir(agent_dot_dir: str, config_dir: str | None, project: bool) -> str:
