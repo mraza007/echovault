@@ -6,21 +6,31 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-25
+
+### Changed
+- **Rewrote the terminal dashboard in Rust** using ratatui + crossterm, replacing the Python/Textual implementation. The dashboard is now a 3MB standalone binary (`memory-dashboard`) with instant startup, no Python runtime needed at runtime.
+- Removed Textual dependency from the Python package — significantly smaller install footprint.
+- `memory dashboard` now executes the Rust binary instead of launching a Python TUI.
+- k9s-style keyboard-driven navigation: `1`-`4` switch panels, `j`/`k`/`g`/`G` vim nav, `/` search, `:` command palette, `?` help overlay.
+- Memory editing opens `$EDITOR` (vim) with the memory as a YAML file.
+- Duplicate detection runs in a background thread — UI stays responsive during the O(n²) comparison.
+- Added `--version` flag to the CLI.
+- Added Project column to the memories table.
+
+### Added
+- `dashboard/` directory with Rust source (ratatui, crossterm, rusqlite with bundled SQLite + FTS5).
+- Confirmation dialogs (y/n) for destructive actions (merge, archive).
+- Toast-style notifications for operation feedback.
+
+### Removed
+- Python Textual dashboard package (`src/memory/dashboard/`).
+- `textual` dependency from `pyproject.toml`.
+
 ## [0.3.0] - 2026-03-25
 
 ### Changed
-- Redesigned the terminal dashboard with k9s-style keyboard-driven navigation — number keys switch between panels instantly, no more tab switching.
-- Replaced horizontal split layout with vertical table-on-top, detail-preview-on-bottom for the memories view.
-- Memory editing now opens `$EDITOR` (defaults to vim) with the memory as a YAML file instead of an in-app form editor.
-- Added vim-style `j`/`k`/`g`/`G` navigation in all data tables.
-- Added `:` command palette for power-user operations (`:import`, `:reindex`, `:project <name>`, etc.).
-- Added `?` help overlay showing all keybindings.
-- Added confirmation dialogs for destructive actions (merge, archive).
-- Replaced operations buttons with keyboard shortcut hints and `RichLog` for timestamped operation output.
-- Operation feedback now uses toast notifications instead of requiring a switch to the operations panel.
-- Added custom header bar showing current mode, active project filter, and memory count.
-- Added context-sensitive key hints in the bottom command bar that update per panel.
-- Refactored dashboard from a single 706-line file into a modular `dashboard/` package (app, widgets, editor).
+- Intermediate Textual dashboard redesign (superseded by 0.4.0 Rust rewrite).
 
 ## [0.2.1] - 2026-03-24
 

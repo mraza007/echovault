@@ -49,7 +49,7 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 Install the latest stable release:
 
 ```bash
-pip install git+https://github.com/mraza007/echovault.git@v0.3.0
+pip install git+https://github.com/mraza007/echovault.git@v0.4.0
 memory init
 memory setup claude-code   # or: cursor, codex, opencode
 ```
