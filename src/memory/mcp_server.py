@@ -38,6 +38,135 @@ SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Retur
 
 CONTEXT_DESCRIPTION = """Get memory context for the current project. You MUST call this at session start to load prior decisions, bugs, and context. Do not skip this step — prior sessions contain decisions and context that directly affect your current task. Use memory_search for specific topics."""
 
+RECORD_USAGE_DESCRIPTION = """Record usage of a memory entry. Use 'type=core' for Core Memories and 'type=main' for EchoVault memories. Recording usage is essential for the Memory Governor to move memories between layers."""
+
+GOVERNOR_DESCRIPTION = """Run the Memory Governor to move memories between Core Memory and Main Memory based on usage statistics.
+- Core -> Main: if not used for 10 sessions.
+- Main -> Core: if used 3 times in a single session.
+Returns a list of recommended actions (ADD/DELETE) for Core Memory."""
+
+COLLECTIVE_DESCRIPTION = """Invoke the Collective Wisdom of Dwarh-cruisers when a single agent cannot solve a task.
+Analyzes the task, searches all available memory projects, and suggests specialized tools or strategies.
+Use this when search results are insufficient or the task requires cross-domain knowledge."""
+
+
+def handle_memory_collective_solve(
+    service: MemoryService,
+    task_description: str,
+) -> str:
+    """Handle memory_collective_solve tool call. Returns JSON string with strategy."""
+    # 1. Broad search across ALL projects in memory
+    all_results = []
+    try:
+        # Search without project filter to get global context
+        all_results = service.search(task_description, limit=10, project=None)
+    except Exception:
+        pass
+
+    # 2. Identify relevant projects and patterns
+    relevant_projects = sorted(list(set(r.get("project") for r in all_results if r.get("project"))))
+    
+    # 3. Analyze if we have specialized tools for this
+    # (Simulated intelligence: if task involves 'network', suggest tcpdump/ip; 
+    # if 'code', suggest ultracode graph tools)
+    suggestions = []
+    task_lower = task_description.lower()
+    
+    if any(k in task_lower for k in ["network", "ip", "port", "connection", "ssh"]):
+        suggestions.append("Use 'tcpdump' or 'ss' for L3-L4 diagnostics.")
+        suggestions.append("Check 'Consolidated SSH Access Map' in Core Memory.")
+    
+    if any(k in task_lower for k in ["refactor", "complexity", "dependency", "class", "function"]):
+        suggestions.append("Invoke 'ultracode' for graph-based impact analysis.")
+        suggestions.append("Use 'mcp_ultracode_suggest_refactoring' for specific entities.")
+
+    if any(k in task_lower for k in ["docker", "container", "sdk", "build"]):
+        suggestions.append("Check 'docker-windows-optimization' requirements in specs.")
+        suggestions.append("Use 'wsl --shutdown' if file locking persists.")
+
+    # 4. Formulate Collective Response
+    response = {
+        "status": "collective_sync",
+        "relevant_knowledge_domains": relevant_projects,
+        "top_memories": [
+            {"title": r["title"], "project": r["project"], "id": r["id"]} 
+            for r in all_results[:3]
+        ],
+        "strategic_suggestions": suggestions or ["Deep dive into project-specific specifications recommended."],
+        "message": "The Collective of Dwarh-cruisers has analyzed the probability field. Voids detected, applying specialized subroutines."
+    }
+
+    return json.dumps(response)
+
+
+def handle_memory_record_usage(
+    service: MemoryService,
+    usage_type: str,
+    memory_id: str,
+) -> str:
+    """Handle memory_record_usage tool call. Returns JSON string."""
+    if usage_type == "core":
+        service.db.record_core_memory_usage(memory_id, service.session_id)
+        return json.dumps({"status": "success", "message": f"Recorded usage for core memory {memory_id}"})
+    elif usage_type == "main":
+        service.db.record_access(memory_id, service.session_id)
+        return json.dumps({"status": "success", "message": f"Recorded access for main memory {memory_id}"})
+    return json.dumps({"status": "error", "message": f"Invalid usage type: {usage_type}"})
+
+
+def handle_memory_governor(service: MemoryService) -> str:
+    """Handle memory_governor tool call. Returns JSON string with actions."""
+    session_id = service.session_id
+    actions = []
+
+    # 1. Demotion logic (Core -> Main)
+    cursor = service.db.conn.cursor()
+    cursor.execute("SELECT id, unused_sessions_count FROM core_memory_usage WHERE unused_sessions_count >= 10")
+    to_demote = cursor.fetchall()
+    for row in to_demote:
+        actions.append({
+            "action": "DELETE",
+            "type": "core",
+            "id": row["id"],
+            "reason": f"Unused for {row['unused_sessions_count']} sessions"
+        })
+
+    # 2. Promotion logic (Main -> Core)
+    cursor.execute("""
+        SELECT id, title, what, why, impact, tags, category, project, session_access_count 
+        FROM memories 
+        WHERE last_session_id = ? AND session_access_count >= 3
+    """, (session_id,))
+    to_promote = cursor.fetchall()
+    for row in to_promote:
+        actions.append({
+            "action": "ADD",
+            "type": "core",
+            "id": row["id"],
+            "title": row["title"],
+            "what": row["what"],
+            "why": row["why"],
+            "impact": row["impact"],
+            "category": row["category"],
+            "project": row["project"],
+            "tags": json.loads(row["tags"]) if isinstance(row["tags"], str) else row["tags"],
+            "reason": f"Used {row['session_access_count']} times in current session"
+        })
+
+    # 3. Session End Maintenance
+    service.db.increment_unused_sessions_for_core(session_id)
+    
+    # Generate next session ID
+    import uuid
+    new_sid = str(uuid.uuid4())
+    service.db.set_meta("current_session_id", new_sid)
+
+    return json.dumps({
+        "actions": actions,
+        "next_session_id": new_sid,
+        "message": "Governor run complete. Please execute the recommended Core Memory actions."
+    })
+
 
 def handle_memory_save(
     service: MemoryService,
@@ -220,6 +349,37 @@ def _create_server(service: MemoryService) -> Server:
                     },
                 },
             ),
+            Tool(
+                name="memory_record_usage",
+                description=RECORD_USAGE_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "usage_type": {"type": "string", "enum": ["core", "main"], "description": "Type of memory entry."},
+                        "memory_id": {"type": "string", "description": "ID of the memory entry."},
+                    },
+                    "required": ["usage_type", "memory_id"],
+                },
+            ),
+            Tool(
+                name="memory_governor",
+                description=GOVERNOR_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            Tool(
+                name="memory_collective_solve",
+                description=COLLECTIVE_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "task_description": {"type": "string", "description": "Description of the complex task."},
+                    },
+                    "required": ["task_description"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -230,6 +390,12 @@ def _create_server(service: MemoryService) -> Server:
             result = handle_memory_search(service, **arguments)
         elif name == "memory_context":
             result = handle_memory_context(service, **arguments)
+        elif name == "memory_record_usage":
+            result = handle_memory_record_usage(service, **arguments)
+        elif name == "memory_governor":
+            result = handle_memory_governor(service)
+        elif name == "memory_collective_solve":
+            result = handle_memory_collective_solve(service, **arguments)
         else:
             result = json.dumps({"error": f"Unknown tool: {name}"})
 

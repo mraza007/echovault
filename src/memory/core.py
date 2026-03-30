@@ -65,6 +65,13 @@ class MemoryService:
         # Load configuration and initialize database
         self.config = load_config(self.config_path)
         self.db = MemoryDB(self.db_path)
+        
+        # Load or create session_id
+        sid = self.db.get_meta("current_session_id")
+        if sid is None:
+            sid = str(uuid.uuid4())
+            self.db.set_meta("current_session_id", sid)
+        self.session_id = sid
 
         # Lazy-load embedding provider (expensive operation)
         self._embedding_provider: Optional[EmbeddingProvider] = None
@@ -363,9 +370,10 @@ class MemoryService:
             )
 
         # Use tiered search: FTS first, embed only if sparse results
+        results = []
         if self.vectors_available:
             try:
-                return tiered_search(
+                results = tiered_search(
                     self.db,
                     self.embedding_provider,
                     query,
@@ -379,16 +387,26 @@ class MemoryService:
             except Exception:
                 pass
 
-        # Fallback: FTS-only search
-        return tiered_search(
-            self.db,
-            None,
-            query,
-            limit=limit,
-            project=project,
-            source=source,
-            include_archived=include_archived,
-        )
+        if not results:
+            # Fallback: FTS-only search
+            results = tiered_search(
+                self.db,
+                None,
+                query,
+                limit=limit,
+                project=project,
+                source=source,
+                include_archived=include_archived,
+            )
+
+        # Record access for all search results
+        for res in results:
+            try:
+                self.db.record_access(res["id"], self.session_id)
+            except Exception:
+                pass
+
+        return results
 
     def _ollama_warm(self) -> bool:
         base_url = self.config.embedding.base_url or "http://localhost:11434"
@@ -467,6 +485,7 @@ class MemoryService:
 
         return results, total
 
+<<<<<<< HEAD
     def list_memories(
         self,
         *,
@@ -793,15 +812,22 @@ class MemoryService:
         candidates.sort(key=lambda item: item["score"], reverse=True)
         return candidates[:limit]
 
-    def get_details(self, memory_id: str) -> Optional[MemoryDetail]:
+    def get_details(self, memory_id: str, record_usage: bool = True) -> Optional[MemoryDetail]:
         """Get full details for a memory by ID.
 
         Args:
             memory_id: UUID of the memory to retrieve details for
+            record_usage: Whether to record access usage (default: True)
 
         Returns:
             MemoryDetail object if details exist, None otherwise
         """
+        if record_usage:
+            try:
+                self.db.record_access(memory_id, self.session_id)
+            except Exception:
+                # Fail silently on access recording (e.g. read-only DB in CLI)
+                pass
         return self.db.get_details(memory_id)
 
     def delete(self, memory_id: str) -> bool:

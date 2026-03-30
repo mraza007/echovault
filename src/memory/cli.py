@@ -636,6 +636,50 @@ def uninstall_opencode_cmd(project):
 
 
 @main.command()
+def governor():
+    """Run Memory Governor to optimize Core vs Main memory layers."""
+    import json
+    from memory.mcp_server import handle_memory_governor
+    
+    svc = MemoryService()
+    try:
+        result_json = handle_memory_governor(svc)
+        result = json.loads(result_json)
+        
+        click.echo("\n--- Memory Governor Run ---")
+        click.echo(f"Message: {result.get('message', 'Complete')}")
+        
+        actions = result.get("actions", [])
+        if not actions:
+            click.echo("No actions recommended at this time.")
+        else:
+            click.echo(f"\nRecommended Actions ({len(actions)}):")
+            for act in actions:
+                a_type = act.get("action", "UNKNOWN")
+                m_type = act.get("type", "memory")
+                m_id = act.get("id", "N/A")
+                reason = act.get("reason", "")
+                title = act.get("title", "")
+                
+                prefix = "+" if a_type == "ADD" else "-"
+                color = "green" if a_type == "ADD" else "red"
+                
+                msg = f"  {prefix} [{a_type}] {m_type} {m_id[:8]}... "
+                if title:
+                    msg += f"({title}) "
+                msg += f"| Reason: {reason}"
+                
+                click.secho(msg, fg=color)
+        
+        click.echo(f"\nNext Session ID: {result.get('next_session_id', 'N/A')}")
+        
+    except Exception as e:
+        click.secho(f"Error running governor: {e}", fg="red")
+    finally:
+        svc.close()
+
+
+@main.command()
 def mcp():
     """Start the EchoVault MCP server (stdio transport)."""
     import asyncio
