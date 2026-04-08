@@ -1,57 +1,73 @@
-# Changelog
+# Changelog / История изменений
 
-All notable changes to this project will be documented in this file.
+**English:** All notable changes to this project will be documented in this file.
 
-The format is inspired by Keep a Changelog and follows semantic versioning.
+**Русский:** Все значимые изменения проекта документируются в этом файле.
 
-## [Unreleased]
+**English:** The format is inspired by Keep a Changelog and follows semantic versioning.
+
+**Русский:** Формат основан на Keep a Changelog и следует семантическому версионированию.
+
+## [Unreleased] / Не выпущено
 
 ## [0.4.0] - 2026-03-25
 
-### Changed
-- **Rewrote the terminal dashboard in Rust** using ratatui + crossterm, replacing the Python/Textual implementation. The dashboard is now a 3MB standalone binary (`memory-dashboard`) with instant startup, no Python runtime needed at runtime.
-- Removed Textual dependency from the Python package — significantly smaller install footprint.
-- `memory dashboard` now executes the Rust binary instead of launching a Python TUI.
-- k9s-style keyboard-driven navigation: `1`-`4` switch panels, `j`/`k`/`g`/`G` vim nav, `/` search, `:` command palette, `?` help overlay.
-- Memory editing opens `$EDITOR` (vim) with the memory as a YAML file.
-- Duplicate detection runs in a background thread — UI stays responsive during the O(n²) comparison.
-- Added `--version` flag to the CLI.
-- Added Project column to the memories table.
+### Changed / Изменено
+| English | Русский |
+|---------|---------|
+| **Rewrote the terminal dashboard in Rust** using ratatui + crossterm. Dashboard is now a 3MB standalone binary with instant startup. | **Переписал терминальный дашборд на Rust** используя ratatui + crossterm. Дашборд теперь — 3MB standalone бинарник с мгновенным стартом. |
+| Removed Textual dependency — smaller install footprint. | Удалена зависимость Textual — меньший размер установки. |
+| `memory dashboard` executes Rust binary instead of Python TUI. | `memory dashboard` запускает Rust бинарник вместо Python TUI. |
+| k9s-style navigation: `1`-`4` panels, `j`/`k`/`g`/`G` vim nav, `/` search, `:` palette. | Навигация в стиле k9s: `1`-`4` панели, `j`/`k`/`g`/`G` vim, `/` поиск, `:` палитра. |
+| Memory editing opens `$EDITOR` (vim) with memory as YAML. | Редактирование открывает `$EDITOR` (vim) с памятью как YAML. |
+| Duplicate detection runs in background thread — UI responsive. | Обнаружение дубликатов в фоновом потоке — UI отзывчивый. |
+| Added `--version` flag to CLI. | Добавлен флаг `--version` в CLI. |
+| Added Project column to memories table. | Добавлена колонка Project в таблицу воспоминаний. |
 
-### Added
-- `dashboard/` directory with Rust source (ratatui, crossterm, rusqlite with bundled SQLite + FTS5).
-- Confirmation dialogs (y/n) for destructive actions (merge, archive).
-- Toast-style notifications for operation feedback.
+### Added / Добавлено
+- `dashboard/` directory with Rust source / директория с Rust исходниками
+- Confirmation dialogs (y/n) for destructive actions / Диалоги подтверждения (y/n) для деструктивных действий
+- Toast-style notifications / Toast-уведомления
 
-### Removed
-- Python Textual dashboard package (`src/memory/dashboard/`).
-- `textual` dependency from `pyproject.toml`.
+### Removed / Удалено
+- Python Textual dashboard package / Python Textual пакет дашборда
+- `textual` dependency from `pyproject.toml` / зависимость `textual`
 
 ## [0.3.0] - 2026-03-25
 
-### Changed
-- Intermediate Textual dashboard redesign (superseded by 0.4.0 Rust rewrite).
+### Changed / Изменено
+| English | Русский |
+|---------|---------|
+| Intermediate Textual dashboard redesign (superseded by 0.4.0 Rust rewrite). | Промежуточный редизайн Textual дашборда (заменён Rust переписыванием в 0.4.0). |
 
 ## [0.2.1] - 2026-03-24
 
-### Changed
-- Bumped version for post-release fixes.
+### Changed / Изменено
+| English | Русский |
+|---------|---------|
+| Bumped version for post-release fixes. | Повышена версия для исправлений после релиза. |
 
 ## [0.2.0] - 2026-03-24
 
-### Added
-- Added `memory dashboard`, a Textual terminal dashboard for vault-wide browsing, editing, archive/restore flows, duplicate review, import, and reindex operations.
-- Added archive-aware lifecycle metadata for memories, including archived state and merge provenance.
-- Added stable markdown memory IDs so existing session files can be safely edited and rewritten.
-- Added dashboard and lifecycle regression coverage for the new TUI and archive/merge flows.
+### Added / Добавлено
+| English | Русский |
+|---------|---------|
+| Added `memory dashboard`, a Textual terminal dashboard for vault-wide browsing, editing, archive/restore flows. | Добавлен `memory dashboard`, Textual терминальный дашборд для просмотра, редактирования, архивирования. |
+| Added archive-aware lifecycle metadata for memories. | Добавлены метаданные жизненного цикла с учётом архивирования. |
+| Added stable markdown memory IDs so session files can be safely edited. | Добавлены стабильные ID для безопасного редактирования файлов сессий. |
+| Added dashboard and lifecycle regression coverage. | Добавлено покрытие тестами дашборда и жизненного цикла. |
 
-### Changed
-- Reworked markdown session handling from append-only helpers into a round-trippable parser/writer that preserves session structure while supporting edits.
-- Updated SQLite and search behavior so archived memories are excluded from normal search and listing paths by default.
-- Improved `memory import` deduplication to key on `(project, file_path, section_anchor)` and hardened import parsing for legacy/BOM/CRLF markdown.
-- Documented the new dashboard command in the README.
+### Changed / Изменено
+| English | Русский |
+|---------|---------|
+| Reworked markdown session handling into round-trippable parser/writer. | Переработана обработка сессий Markdown в round-trippable парсер/писатель. |
+| Archived memories excluded from normal search by default. | Архивированные воспоминания исключены из обычного поиска по умолчанию. |
+| Improved `memory import` deduplication to key on `(project, file_path, section_anchor)`. | Улучшено дедуплицирование `memory import` по `(project, file_path, section_anchor)`. |
+| Documented the new dashboard command in the README. | Документирована новая команда дашборда в README. |
 
-### Fixed
-- Fixed import behavior for same-title memories across session files.
-- Fixed import decoding for legacy cp1251 and UTF-8 BOM/CRLF markdown inputs.
+### Fixed / Исправлено
+| English | Русский |
+|---------|---------|
+| Fixed import behavior for same-title memories across session files. | Исправлено поведение импорта для воспоминаний с одинаковыми заголовками. |
+| Fixed import decoding for legacy cp1251 and UTF-8 BOM/CRLF. | Исправлено декодирование импорта для legacy cp1251 и UTF-8 BOM/CRLF. |
 

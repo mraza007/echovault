@@ -158,7 +158,7 @@ class MemoryDB:
             END
         """)
 
-        # Migration: add updated_count column if missing
+        # Migration: add usage tracking columns if missing
         cursor.execute("PRAGMA table_info(memories)")
         columns = {row[1] for row in cursor.fetchall()}
         if "updated_count" not in columns:
@@ -171,6 +171,24 @@ class MemoryDB:
             cursor.execute("ALTER TABLE memories ADD COLUMN archive_reason TEXT")
         if "superseded_by" not in columns:
             cursor.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT")
+        if "access_count" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN access_count INTEGER DEFAULT 0")
+        if "session_access_count" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN session_access_count INTEGER DEFAULT 0")
+        if "last_session_id" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN last_session_id TEXT")
+        if "last_accessed_at" not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN last_accessed_at TEXT")
+
+        # Create core memory usage tracking table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS core_memory_usage (
+                id TEXT PRIMARY KEY,
+                unused_sessions_count INTEGER DEFAULT 0,
+                last_used_session_id TEXT,
+                last_used_at TEXT
+            )
+        """)
 
         # Create vec table if dimension is already known (e.g. reopening existing DB)
         dim = self.get_embedding_dim()
@@ -301,6 +319,84 @@ class MemoryDB:
             VALUES (?, ?)
         """, (rowid, vec_bytes))
 
+        self.conn.commit()
+
+    def record_access(self, memory_id: str, session_id: str) -> None:
+        """Record an access to a memory and increment counters.
+
+        Args:
+            memory_id: Full UUID or prefix of the memory accessed
+            session_id: Current session identifier
+        """
+        cursor = self.conn.cursor()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Resolve full ID
+        cursor.execute("SELECT id, last_session_id FROM memories WHERE id LIKE ?", (memory_id + "%",))
+        row = cursor.fetchone()
+        if not row:
+            return
+
+        full_id = row["id"]
+        last_sid = row["last_session_id"]
+
+        if last_sid != session_id:
+            # New session for this memory: reset session count and increment total
+            cursor.execute("""
+                UPDATE memories
+                SET access_count = access_count + 1,
+                    session_access_count = 1,
+                    last_session_id = ?,
+                    last_accessed_at = ?
+                WHERE id = ?
+            """, (session_id, now, full_id))
+        else:
+            # Same session: increment both
+            cursor.execute("""
+                UPDATE memories
+                SET access_count = access_count + 1,
+                    session_access_count = session_access_count + 1,
+                    last_accessed_at = ?
+                WHERE id = ?
+            """, (now, full_id))
+
+        self.conn.commit()
+
+    def record_core_memory_usage(self, core_id: str, session_id: str) -> None:
+        """Record usage of a core memory entry.
+
+        Args:
+            core_id: Core memory ID
+            session_id: Current session identifier
+        """
+        cursor = self.conn.cursor()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+
+        cursor.execute("""
+            INSERT INTO core_memory_usage (id, unused_sessions_count, last_used_session_id, last_used_at)
+            VALUES (?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                unused_sessions_count = 0,
+                last_used_session_id = excluded.last_used_session_id,
+                last_used_at = excluded.last_used_at
+        """, (core_id, session_id, now))
+
+        self.conn.commit()
+
+    def increment_unused_sessions_for_core(self, session_id: str) -> None:
+        """Increment unused session count for all core memories not used in this session.
+
+        Args:
+            session_id: Current session identifier
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE core_memory_usage
+            SET unused_sessions_count = unused_sessions_count + 1
+            WHERE last_used_session_id IS NULL OR last_used_session_id != ?
+        """, (session_id,))
         self.conn.commit()
 
     def get_memory(self, memory_id: str) -> Optional[dict]:

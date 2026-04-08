@@ -1073,3 +1073,63 @@ def test_mcp_command_exists():
     result = runner.invoke(main, ["mcp", "--help"])
     assert result.exit_code == 0
     assert "mcp" in result.output.lower() or "stdio" in result.output.lower()
+
+
+# --- governor command tests ---
+
+
+def test_governor_command_exists():
+    """Test that the governor command is registered."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["governor", "--help"])
+    assert result.exit_code == 0
+    assert "Memory Governor" in result.output or "optimize" in result.output.lower()
+
+
+def test_governor_shows_actions(env_home):
+    """Test that governor shows actions when memories need promotion/demotion."""
+    service = MemoryService(memory_home=str(env_home))
+
+    # Save and access a memory 3 times to trigger promotion
+    raw = RawMemoryInput(
+        title="Hot Memory for Governor",
+        what="This memory should be promoted",
+        category="pattern",
+        tags=["test"],
+    )
+    result = service.save(raw, project="test-project")
+    memory_id = result["id"]
+
+    # Access 3 times in same session
+    for _ in range(3):
+        service.db.record_access(memory_id, service.session_id)
+
+    service.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["governor"])
+
+    assert result.exit_code == 0
+    assert "Memory Governor Run" in result.output
+    assert "ADD" in result.output  # Promotion action
+    assert "Used 3 times" in result.output
+
+
+def test_governor_shows_no_actions_when_empty(env_home):
+    """Test that governor shows 'no actions' when vault is empty."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["governor"])
+
+    assert result.exit_code == 0
+    assert "Memory Governor Run" in result.output
+    assert "No actions recommended" in result.output or "actions" in result.output.lower()
+
+
+def test_governor_shows_next_session_id(env_home):
+    """Test that governor shows the next session ID."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["governor"])
+
+    assert result.exit_code == 0
+    assert "Next Session ID:" in result.output
+

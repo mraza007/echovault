@@ -6,11 +6,35 @@ from datetime import datetime
 from typing import Optional
 
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
+
+from mcp.server.stdio import stdio_server
 
 from memory.core import MemoryService
 from memory.models import RawMemoryInput
+from memory.web_search import get_web_search_manager
+from memory.rollback import RollbackManager, FeatureState
+from memory.unified_adapter import UnifiedMemoryAdapter
+
+# Global unified memory adapter (lazy init)
+_unified_adapter: Optional[UnifiedMemoryAdapter] = None
+_unified_initialized = False
+
+def _get_unified_adapter(service: MemoryService) -> Optional[UnifiedMemoryAdapter]:
+    """Get or create unified adapter based on feature flags."""
+    global _unified_adapter, _unified_initialized
+    
+    if not _unified_initialized:
+        mgr = RollbackManager(memory_home=service.memory_home)
+        if mgr.should_use_unified():
+            from memory.unified_adapter import create_unified_adapter
+            _unified_adapter = create_unified_adapter(
+                existing=service,
+                memory_home=service.memory_home
+            )
+        _unified_initialized = True
+    
+    return _unified_adapter
 
 VALID_CATEGORIES = ("decision", "bug", "pattern", "learning", "context")
 
@@ -37,6 +61,176 @@ When filling `details`, prefer this structure:
 SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Returns matching memories ranked by relevance. You MUST call this at session start before doing any work, and whenever the user's request relates to a topic that may have prior context."""
 
 CONTEXT_DESCRIPTION = """Get memory context for the current project. You MUST call this at session start to load prior decisions, bugs, and context. Do not skip this step — prior sessions contain decisions and context that directly affect your current task. Use memory_search for specific topics."""
+
+RECORD_USAGE_DESCRIPTION = """Record usage of a memory entry. Use 'type=core' for Core Memories and 'type=main' for EchoVault memories. Recording usage is essential for the Memory Governor to move memories between layers."""
+
+GOVERNOR_DESCRIPTION = """Run the Memory Governor to move memories between Core Memory and Main Memory based on usage statistics.
+- Core -> Main: if not used for 10 sessions.
+- Main -> Core: if used 3 times in a single session.
+Returns a list of recommended actions (ADD/DELETE) for Core Memory."""
+
+ROLLBACK_STATUS_DESCRIPTION = """Check unified memory rollback system status.
+
+Shows feature flags, error rates, and backup status.
+Use before enabling unified memory to verify system health."""
+
+ROLLBACK_ENABLE_DESCRIPTION = """Enable unified memory system.
+
+Stages:
+- shadow: Write to both systems (safe testing)
+- canary: 10% traffic to new system (gradual rollout)  
+- enabled: Full unified system
+
+WARNING: Always backup first!"""
+
+ROLLBACK_EMERGENCY_DESCRIPTION = """Emergency rollback to legacy system.
+
+Instantly disables unified memory and restores legacy mode.
+Use if errors or performance issues occur."""
+
+COLLECTIVE_DESCRIPTION = """Invoke the Collective Wisdom of Dwarh-cruisers when a single agent cannot solve a task.
+Analyzes the task, searches all available memory projects, and suggests specialized tools or strategies.
+Automatically performs web search when local memory is insufficient and API keys are configured.
+Use this when search results are insufficient or the task requires cross-domain knowledge."""
+
+
+async def handle_memory_collective_solve(
+    service: MemoryService,
+    task_description: str,
+) -> str:
+    """Handle memory_collective_solve tool call. Returns JSON string with strategy.
+    
+    Hybrid approach: local memory first, web search fallback when needed.
+    """
+    web_manager = get_web_search_manager()
+    
+    # 1. Broad search across ALL projects in memory
+    all_results = []
+    try:
+        # Search without project filter to get global context
+        all_results = service.search(task_description, limit=10, project=None)
+    except Exception:
+        pass
+
+    # 2. Web search if local results are insufficient
+    web_results = []
+    try:
+        if web_manager.needs_web_search(task_description, len(all_results)):
+            web_results = await web_manager.search(task_description)
+    except Exception:
+        # Web search is optional - don't fail if it errors
+        pass
+
+    # 3. Identify relevant projects and patterns
+    relevant_projects = sorted(list(set(r.get("project") for r in all_results if r.get("project"))))
+    
+    # 4. Analyze if we have specialized tools for this
+    suggestions = []
+    task_lower = task_description.lower()
+    
+    if any(k in task_lower for k in ["network", "ip", "port", "connection", "ssh"]):
+        suggestions.append("Use 'tcpdump' or 'ss' for L3-L4 diagnostics.")
+        suggestions.append("Check 'Consolidated SSH Access Map' in Core Memory.")
+    
+    if any(k in task_lower for k in ["refactor", "complexity", "dependency", "class", "function"]):
+        suggestions.append("Invoke 'ultracode' for graph-based impact analysis.")
+        suggestions.append("Use 'mcp_ultracode_suggest_refactoring' for specific entities.")
+
+    if any(k in task_lower for k in ["docker", "container", "sdk", "build"]):
+        suggestions.append("Check 'docker-windows-optimization' requirements in specs.")
+        suggestions.append("Use 'wsl --shutdown' if file locking persists.")
+    
+    # Add web results to suggestions if available
+    if web_results:
+        suggestions.append(f"Web search found {len(web_results)} relevant sources.")
+        for r in web_results[:2]:
+            suggestions.append(f"  • {r.title[:50]}... ({r.source})")
+
+    # 5. Formulate Collective Response
+    response = {
+        "status": "collective_sync",
+        "local_memories_found": len(all_results),
+        "web_sources_found": len(web_results),
+        "relevant_knowledge_domains": relevant_projects,
+        "top_memories": [
+            {"title": r["title"], "project": r["project"], "id": r["id"]} 
+            for r in all_results[:3]
+        ],
+        "web_sources": web_manager.format_results_for_collective(web_results) if web_results else [],
+        "strategic_suggestions": suggestions or ["Deep dive into project-specific specifications recommended."],
+        "message": "The Collective of Dwarh-cruisers has analyzed the probability field. Voids detected, applying specialized subroutines."
+    }
+
+    return json.dumps(response)
+
+
+def handle_memory_record_usage(
+    service: MemoryService,
+    usage_type: str,
+    memory_id: str,
+) -> str:
+    """Handle memory_record_usage tool call. Returns JSON string."""
+    if usage_type == "core":
+        service.db.record_core_memory_usage(memory_id, service.session_id)
+        return json.dumps({"status": "success", "message": f"Recorded usage for core memory {memory_id}"})
+    elif usage_type == "main":
+        service.db.record_access(memory_id, service.session_id)
+        return json.dumps({"status": "success", "message": f"Recorded access for main memory {memory_id}"})
+    return json.dumps({"status": "error", "message": f"Invalid usage type: {usage_type}"})
+
+
+def handle_memory_governor(service: MemoryService) -> str:
+    """Handle memory_governor tool call. Returns JSON string with actions."""
+    session_id = service.session_id
+    actions = []
+
+    # 1. Demotion logic (Core -> Main)
+    cursor = service.db.conn.cursor()
+    cursor.execute("SELECT id, unused_sessions_count FROM core_memory_usage WHERE unused_sessions_count >= 10")
+    to_demote = cursor.fetchall()
+    for row in to_demote:
+        actions.append({
+            "action": "DELETE",
+            "type": "core",
+            "id": row["id"],
+            "reason": f"Unused for {row['unused_sessions_count']} sessions"
+        })
+
+    # 2. Promotion logic (Main -> Core)
+    cursor.execute("""
+        SELECT id, title, what, why, impact, tags, category, project, session_access_count 
+        FROM memories 
+        WHERE last_session_id = ? AND session_access_count >= 3
+    """, (session_id,))
+    to_promote = cursor.fetchall()
+    for row in to_promote:
+        actions.append({
+            "action": "ADD",
+            "type": "core",
+            "id": row["id"],
+            "title": row["title"],
+            "what": row["what"],
+            "why": row["why"],
+            "impact": row["impact"],
+            "category": row["category"],
+            "project": row["project"],
+            "tags": json.loads(row["tags"]) if isinstance(row["tags"], str) else row["tags"],
+            "reason": f"Used {row['session_access_count']} times in current session"
+        })
+
+    # 3. Session End Maintenance
+    service.db.increment_unused_sessions_for_core(session_id)
+    
+    # Generate next session ID
+    import uuid
+    new_sid = str(uuid.uuid4())
+    service.db.set_meta("current_session_id", new_sid)
+
+    return json.dumps({
+        "actions": actions,
+        "next_session_id": new_sid,
+        "message": "Governor run complete. Please execute the recommended Core Memory actions."
+    })
 
 
 def handle_memory_save(
@@ -77,9 +271,18 @@ def handle_memory_search(
     query: str,
     limit: int = 5,
     project: Optional[str] = None,
+    sort_by: Optional[str] = None,
 ) -> str:
     """Handle memory_search tool call. Returns JSON string."""
     results = service.search(query, limit=limit, project=project)
+
+    # Sort by timestamp if requested (for versioning support)
+    if sort_by == "timestamp":
+        import re
+        def extract_ts(r):
+            m = re.search(r'\[(\d{10,})\]', r.get("title", ""))
+            return int(m.group(1)) if m else 0
+        results = sorted(results, key=extract_ts, reverse=True)
 
     clean = []
     for r in results:
@@ -205,6 +408,7 @@ def _create_server(service: MemoryService) -> Server:
                         "query": {"type": "string", "description": "Search terms"},
                         "limit": {"type": "integer", "default": 5, "description": "Max results"},
                         "project": {"type": "string", "description": "Filter to project."},
+                        "sort_by": {"type": "string", "enum": ["relevance", "timestamp"], "default": "relevance", "description": "Sort results by relevance (default) or timestamp (for versioning)."},
                     },
                     "required": ["query"],
                 },
@@ -220,18 +424,192 @@ def _create_server(service: MemoryService) -> Server:
                     },
                 },
             ),
+            Tool(
+                name="memory_record_usage",
+                description=RECORD_USAGE_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "usage_type": {"type": "string", "enum": ["core", "main"], "description": "Type of memory entry."},
+                        "memory_id": {"type": "string", "description": "ID of the memory entry."},
+                    },
+                    "required": ["usage_type", "memory_id"],
+                },
+            ),
+            Tool(
+                name="memory_governor",
+                description=GOVERNOR_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            Tool(
+                name="memory_collective_solve",
+                description=COLLECTIVE_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "task_description": {"type": "string", "description": "Description of the complex task."},
+                    },
+                    "required": ["task_description"],
+                },
+            ),
+            Tool(
+                name="memory_rollback_status",
+                description=ROLLBACK_STATUS_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            Tool(
+                name="memory_rollback_enable",
+                description=ROLLBACK_ENABLE_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "stage": {
+                            "type": "string",
+                            "enum": ["shadow", "canary", "enabled"],
+                            "description": "Rollout stage"
+                        },
+                    },
+                    "required": ["stage"],
+                },
+            ),
+            Tool(
+                name="memory_rollback_emergency",
+                description=ROLLBACK_EMERGENCY_DESCRIPTION,
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            Tool(
+                name="memory_unified_search",
+                description="Search unified memory system (Fast + Medium tiers). Returns results immediately from Fast (in-memory) and Medium (SSD) tiers.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "limit": {"type": "integer", "default": 5, "description": "Max results"},
+                        "project": {"type": "string", "description": "Filter by project"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="memory_unified_context",
+                description="Get context from Fast and Medium tiers. Retrieves recent memories for context injection. Faster than search.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "default": 10, "description": "Max memories"},
+                        "project": {"type": "string", "description": "Filter by project"},
+                    },
+                },
+            ),
+            Tool(
+                name="memory_unified_save",
+                description="Save to unified memory (Fast tier). Entry starts in Fast tier (24h TTL), migrates to Medium (7d), then Slow (archive).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short title"},
+                        "what": {"type": "string", "description": "The essence"},
+                        "why": {"type": "string", "description": "Reasoning"},
+                        "impact": {"type": "string", "description": "What changed"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "category": {"type": "string", "enum": ["decision", "bug", "pattern", "learning", "context"]},
+                        "project": {"type": "string", "description": "Project name"},
+                    },
+                    "required": ["title", "what"],
+                },
+            ),
         ]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if name == "memory_save":
+            # Shadow mode: write to both systems if enabled
+            unified = _get_unified_adapter(service)
+            if unified and RollbackManager(memory_home=service.memory_home).config.feature_state == FeatureState.SHADOW:
+                try:
+                    unified.save_unified(
+                        memory_id=str(__import__('uuid').uuid4()),
+                        title=arguments.get("title", ""),
+                        what=arguments.get("what", ""),
+                        why=arguments.get("why"),
+                        impact=arguments.get("impact"),
+                        tags=arguments.get("tags", []),
+                        category=arguments.get("category"),
+                        project=arguments.get("project"),
+                        details=arguments.get("details")
+                    )
+                except Exception:
+                    pass  # Don't fail if unified write fails
+            
             result = handle_memory_save(service, **arguments)
         elif name == "memory_search":
             result = handle_memory_search(service, **arguments)
         elif name == "memory_context":
             result = handle_memory_context(service, **arguments)
-        else:
-            result = json.dumps({"error": f"Unknown tool: {name}"})
+        elif name == "memory_record_usage":
+            result = handle_memory_record_usage(service, **arguments)
+        elif name == "memory_governor":
+            result = handle_memory_governor(service)
+        elif name == "memory_collective_solve":
+            result = await handle_memory_collective_solve(service, **arguments)
+        elif name == "memory_rollback_status":
+            mgr = RollbackManager(memory_home=service.memory_home)
+            result = json.dumps(mgr.get_status())
+        elif name == "memory_rollback_enable":
+            from memory.rollback import enable_shadow_mode, enable_canary, enable_unified
+            stage = arguments.get("stage", "shadow")
+            if stage == "shadow":
+                enable_shadow_mode(service.memory_home)
+            elif stage == "canary":
+                enable_canary(service.memory_home)
+            elif stage == "enabled":
+                enable_unified(service.memory_home)
+            result = json.dumps({"status": "enabled", "stage": stage})
+        elif name == "memory_rollback_emergency":
+            from memory.rollback import rollback
+            rollback(service.memory_home)
+            result = json.dumps({"status": "emergency_rollback", "message": "Unified memory disabled"})
+        elif name == "memory_unified_search":
+            from memory.unified import create_unified_memory
+            unified = create_unified_memory(memory_home=service.memory_home)
+            entries = unified.search_sync(
+                query=arguments.get("query", ""),
+                limit=arguments.get("limit", 5),
+                project=arguments.get("project")
+            )
+            result = json.dumps({"results": [e.__dict__ for e in entries], "count": len(entries)})
+        elif name == "memory_unified_context":
+            from memory.unified import create_unified_memory
+            unified = create_unified_memory(memory_home=service.memory_home)
+            entries = unified.get_context_sync(
+                limit=arguments.get("limit", 10),
+                project=arguments.get("project")
+            )
+            result = json.dumps({"results": [e.__dict__ for e in entries], "count": len(entries)})
+        elif name == "memory_unified_save":
+            from memory.unified import create_unified_memory, MemoryEntry, MemoryTier
+            unified = create_unified_memory(memory_home=service.memory_home)
+            entry = MemoryEntry(
+                title=arguments.get("title", ""),
+                what=arguments.get("what", ""),
+                why=arguments.get("why"),
+                impact=arguments.get("impact"),
+                tags=arguments.get("tags", []),
+                category=arguments.get("category"),
+                project=arguments.get("project"),
+                tier=MemoryTier.FAST
+            )
+            unified.save(entry)
+            result = json.dumps({"status": "saved", "id": entry.id})
 
         return [TextContent(type="text", text=result)]
 
