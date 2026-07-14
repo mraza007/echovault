@@ -297,30 +297,36 @@ def _get_skill_md_path() -> str:
     return ""
 
 
-def _install_skill(agent_home: str) -> bool:
+def _install_skill(agent_home: str, agent_name: str = "agent") -> bool:
     """Install the echovault SKILL.md into an agent's skills directory.
 
     Args:
         agent_home: Path to the agent's config directory (e.g. ~/.claude).
 
     Returns:
-        True if skill was installed, False if already present.
+        True if skill was installed or refreshed, False if already current.
     """
     skill_dir = os.path.join(agent_home, "skills", "echovault")
     skill_path = os.path.join(skill_dir, "SKILL.md")
 
-    if os.path.exists(skill_path):
-        return False
-
     source = _get_skill_md_path()
-    os.makedirs(skill_dir, exist_ok=True)
-
     if source:
-        shutil.copy2(source, skill_path)
+        with open(source) as f:
+            content = f.read()
     else:
-        # Fallback: write a minimal skill file
-        with open(skill_path, "w") as f:
-            f.write(_FALLBACK_SKILL_MD)
+        content = _FALLBACK_SKILL_MD
+    content = content.replace("{{AGENT_NAME}}", agent_name)
+
+    try:
+        with open(skill_path) as f:
+            if f.read() == content:
+                return False
+    except FileNotFoundError:
+        pass
+
+    os.makedirs(skill_dir, exist_ok=True)
+    with open(skill_path, "w") as f:
+        f.write(content)
 
     return True
 
@@ -344,34 +350,26 @@ def _uninstall_skill(agent_home: str) -> bool:
 _FALLBACK_SKILL_MD = """\
 ---
 name: echovault
-description: Local-first memory for coding agents. You MUST retrieve memories at session start and save memories before session end. This is not optional.
+description: Local-first memory for coding agents. You MUST retrieve task-aware context before substantive work and save durable learnings before session end.
 ---
 
 # EchoVault — Agent Memory System
 
 You have persistent memory across sessions. USE IT.
 
-## Session start — MANDATORY
+## Task-aware context — MANDATORY
 
-Before doing ANY work, retrieve context from previous sessions:
+Before feature, planning, debugging, or architecture work, use `memory_context`
+with `agent="{{AGENT_NAME}}"` and `query` set to the current user request.
 
-```bash
-memory context --project
-```
-
-If the user's request relates to a specific topic, also search for it:
+CLI fallback:
 
 ```bash
-memory search "<relevant terms>"
+memory context --project --agent {{AGENT_NAME}} --query "<current user request>"
 ```
 
-When search results show "Details: available", fetch them:
-
-```bash
-memory details <memory-id>
-```
-
-Do not skip this step. Prior sessions may contain decisions, bugs, and context that directly affect your current task.
+If policy reports disabled, continue normally. Use explicit search when the
+context pack is insufficient.
 
 ## Session end — MANDATORY
 
@@ -386,7 +384,7 @@ memory save \\
   --tags "tag1,tag2,tag3" \\
   --category "<category>" \\
   --related-files "path/to/file1,path/to/file2" \\
-  --source "claude-code" \\
+  --source "{{AGENT_NAME}}" \\
   --details "Context:
 
              Options considered:
@@ -398,9 +396,10 @@ memory save \\
              Follow-up:"
 ```
 
-Categories: `decision`, `bug`, `pattern`, `learning`, `context`.
+Categories: `decision`, `bug`, `pattern`, `learning`, `context`, `playbook`,
+`known_fix`, `constraint`, `project_state`, `active_work`.
 
-Use `--source` to identify the agent: `claude-code`, `codex`, or `cursor`.
+Use `--source {{AGENT_NAME}}` to identify the agent.
 
 ### What to save
 
@@ -471,8 +470,9 @@ def setup_claude_code(claude_home: str, *, project: bool = False) -> dict[str, s
             installed.append("migrated mcpServers from settings.json")
         _write_json(settings_path, settings)
 
-    # Remove old skill if present
-    _uninstall_skill(claude_home)
+    # Install or refresh behavioral instructions alongside native MCP tools.
+    if _install_skill(claude_home, "claude-code"):
+        installed.append("skill")
 
     # Add MCP server config
     mcp_path = _get_claude_mcp_path(claude_home, project)
@@ -526,10 +526,11 @@ You have persistent memory across sessions. Use it.
 
 ### Session start — MANDATORY
 
-Before doing any work, retrieve context:
+Before planning or implementing a feature, retrieve task-relevant context (unless
+`memory config context` reports `off`):
 
 ```bash
-memory context --project
+memory context --project --agent codex --query "<current task or feature request>"
 ```
 
 Search for relevant memories:
@@ -614,7 +615,7 @@ def setup_codex(codex_home: str) -> dict[str, str]:
         installed.append("config.toml")
 
     # Skill (legacy)
-    if _install_skill(codex_home):
+    if _install_skill(codex_home, "codex"):
         installed.append("skill")
 
     if not installed:

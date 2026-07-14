@@ -21,6 +21,23 @@ def _tokenize(text: str) -> set[str]:
     return {token for token in re.findall(r"\w+", text.lower(), flags=re.UNICODE)}
 
 
+def _lexical_coverage(result: dict, query: str) -> float:
+    """Return the fraction of meaningful query terms present in a result."""
+    query_terms = {
+        token for token in _tokenize(query)
+        if len(token) > 1 and token not in {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+            "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "with",
+        }
+    }
+    if not query_terms:
+        return 1.0
+    haystack = _tokenize(" ".join(str(result.get(field, "") or "") for field in (
+        "title", "what", "why", "impact", "tags", "category",
+    )))
+    return len(query_terms & haystack) / len(query_terms)
+
+
 def adjust_result_scores(results: list[dict], query: str) -> list[dict]:
     """Down-rank low-signal housekeeping memories unless the query asks for them.
 
@@ -70,6 +87,10 @@ def merge_results(
         Merged and re-ranked results, sorted by combined score descending
     """
     # Normalize FTS scores to 0-1
+    fts_results = [dict(r) for r in fts_results]
+    vec_results = [dict(r) for r in vec_results]
+    raw_fts = {r["id"]: float(r.get("score", 0.0)) for r in fts_results}
+    raw_vec = {r["id"]: float(r.get("score", 0.0)) for r in vec_results}
     if fts_results:
         max_fts = max(r["score"] for r in fts_results) or 1.0
         for r in fts_results:
@@ -96,6 +117,15 @@ def merge_results(
             scores[rid]["score"] = vec_weight * r["score"]
 
     ranked = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
+    for item in ranked:
+        item["score_explain"] = {
+            "mode": "hybrid",
+            "fts_raw": round(raw_fts.get(item["id"], 0.0), 6),
+            "vector_similarity": round(raw_vec.get(item["id"], 0.0), 6),
+            "fts_weight": fts_weight,
+            "vector_weight": vec_weight,
+            "combined": round(float(item["score"]), 6),
+        }
     return ranked[:limit]
 
 
@@ -108,6 +138,8 @@ def tiered_search(
     project: Optional[str] = None,
     source: Optional[str] = None,
     include_archived: bool = False,
+    min_relevance: float = 0.0,
+    min_vector_similarity: float = 0.0,
 ) -> list[dict]:
     """FTS-first tiered search that only calls embed when FTS results are sparse.
 
@@ -144,12 +176,19 @@ def tiered_search(
     # Raw result count alone is too noisy for natural-language queries because
     # weak OR matches can inflate FTS results without being genuinely relevant.
     strong_fts_results = [r for r in fts_results if r["score"] >= 0.15]
-    if len(strong_fts_results) >= min_fts_results:
-        return adjust_result_scores(fts_results, query)[:limit]
+    top_lexical_coverage = _lexical_coverage(fts_results[0], query) if fts_results else 0.0
+    if len(strong_fts_results) >= min_fts_results and top_lexical_coverage >= 0.5:
+        ranked = adjust_result_scores(fts_results, query)
+        for item in ranked:
+            item["score_explain"] = {
+                "mode": "fts", "normalized": round(float(item["score"]), 6),
+                "query_term_coverage": round(_lexical_coverage(item, query), 6),
+            }
+        return [r for r in ranked if r["score"] >= min_relevance][:limit]
 
     # If no embedding provider, return FTS-only
     if embedding_provider is None:
-        return adjust_result_scores(fts_results, query)[:limit]
+        return [r for r in adjust_result_scores(fts_results, query) if r["score"] >= min_relevance][:limit]
 
     # FTS results are sparse — fall back to hybrid (embed + vector search + merge)
     try:
@@ -161,6 +200,10 @@ def tiered_search(
             source=source,
             include_archived=include_archived,
         )
+        vec_results = [
+            r for r in vec_results
+            if float(r.get("score", 0.0)) >= min_vector_similarity
+        ]
         # When lexical evidence is sparse and disagrees with the top semantic hit,
         # trust vectors more heavily. A single strong keyword match can otherwise
         # overwhelm the actual best semantic result.
@@ -176,7 +219,7 @@ def tiered_search(
 
         # FTS scores already normalized (max=1.0); merge_results re-normalizes
         # which is a no-op on 0-1 scores.
-        return adjust_result_scores(
+        ranked = adjust_result_scores(
             merge_results(
                 fts_results,
                 vec_results,
@@ -185,10 +228,11 @@ def tiered_search(
                 limit=limit * 2,
             ),
             query,
-        )[:limit]
+        )
+        return [r for r in ranked if r["score"] >= min_relevance][:limit]
     except Exception:
         # On any embedding/vector error, return whatever FTS found
-        return adjust_result_scores(fts_results, query)[:limit]
+        return [r for r in adjust_result_scores(fts_results, query) if r["score"] >= min_relevance][:limit]
 
 
 def hybrid_search(
@@ -199,6 +243,8 @@ def hybrid_search(
     project: Optional[str] = None,
     source: Optional[str] = None,
     include_archived: bool = False,
+    min_relevance: float = 0.0,
+    min_vector_similarity: float = 0.0,
 ) -> list[dict]:
     """Run FTS5 and optionally vector search, merge results.
 
@@ -229,7 +275,7 @@ def hybrid_search(
             max_score = max(r["score"] for r in fts_results) or 1.0
             for r in fts_results:
                 r["score"] = r["score"] / max_score if max_score > 0 else 0.0
-        return adjust_result_scores(fts_results, query)[:limit]
+        return [r for r in adjust_result_scores(fts_results, query) if r["score"] >= min_relevance][:limit]
 
     query_vec = embedding_provider.embed(query)
     vec_results = db.vector_search(
@@ -239,6 +285,8 @@ def hybrid_search(
         source=source,
         include_archived=include_archived,
     )
-    return adjust_result_scores(
+    vec_results = [r for r in vec_results if float(r.get("score", 0.0)) >= min_vector_similarity]
+    ranked = adjust_result_scores(
         merge_results(fts_results, vec_results, limit=limit * 2), query
-    )[:limit]
+    )
+    return [r for r in ranked if r["score"] >= min_relevance][:limit]

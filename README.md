@@ -36,6 +36,12 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 **Hybrid search** — FTS5 keyword search works out of the box. Add Ollama or OpenAI for semantic vector search.
 
+**Living context** — Agents can pull a task-aware, token-budgeted project context pack before feature work. Context can be enabled globally, overridden per agent, or disabled for one session without disabling save or search.
+
+**Operational memory types** — Store playbooks, known fixes, constraints, project state, and active work with structured procedures, verification, follow-ups, provenance, confidence, and validity windows.
+
+**Measurable retrieval** — Calibrated relevance thresholds, `--explain`, redacted golden-set evaluation, local feedback counters, lifecycle review, and `memory doctor` keep retrieval useful as the vault grows.
+
 **Secret redaction** — 3-layer redaction strips API keys, passwords, and credentials before anything hits disk. Supports explicit `<redacted>` tags, pattern detection, and custom `.memoryignore` rules.
 
 **Cross-agent** — Memories saved by Claude Code are searchable in Cursor, Codex, and OpenCode. One vault, many agents.
@@ -96,15 +102,32 @@ enrichment:
   provider: none                # none | ollama | openai
 
 context:
+  mode: auto                    # on | off | auto
   semantic: auto                # auto | always | never
   topup_recent: true
+  token_budget: 1200
+  min_relevance: 0.70           # calibrated on the redacted benchmark
+  min_vector_similarity: 0.05   # calibrated starting point for nomic-embed-text
+  agent_modes:
+    codex: on
 ```
+
+Context-policy precedence is:
+
+1. `MEMORY_CONTEXT` for the current process or agent session
+2. `context.agent_modes.<agent>`
+3. `context.mode`
+
+Turning automatic context off does not disable `memory_search`, `memory_save`, or their CLI equivalents.
 
 **What each section does:**
 
 - **`embedding`** — How memories get turned into vectors for semantic search. `ollama` runs locally, and `openai` calls cloud APIs. `nomic-embed-text` is a good local model for Ollama.
 - **`enrichment`** — Optional LLM step that enhances memories before storing (better summaries, auto-tags). Set to `none` to skip.
-- **`context`** — Controls how memories are retrieved at session start. `auto` uses vector search when embeddings are available, falls back to keywords. `topup_recent` also includes recent memories so the agent has fresh context.
+- **`context.mode`** — Controls automatic context injection: `on`, `off`, or `auto`. `MEMORY_CONTEXT` overrides it for one agent session; `agent_modes` provides per-agent defaults. Explicit save and search still work when context is off.
+- **`context.semantic`** — Controls how task queries use embeddings. `auto` uses vectors when available and falls back to keywords.
+- **`context.token_budget`** — Approximate maximum size of the context pack. Relevant results are selected first, then constraints, project state, active work, known fixes, playbooks, decisions, and useful recent memories.
+- **Relevance thresholds** — `min_relevance` filters weak ranked results and `min_vector_similarity` prevents nearest-neighbor search from returning unrelated memories merely because something must be nearest.
 
 For cloud providers, add `api_key` under the provider section. To use OpenAI-compatible endpoints (proxies/gateways/self-hosted), set `base_url` (for OpenAI: `https://api.openai.com/v1`). API keys are redacted in `memory config` output.
 
@@ -170,10 +193,72 @@ Follow-up:"
 memory search "authentication"
 memory details <id>
 memory context --project
+memory context --project --agent codex --query "add organization API keys"
+memory context --project --agent claude-code --query "add organization API keys"
+memory config context off --agent codex
+MEMORY_CONTEXT=off codex                    # session-only override
 memory dashboard
 ```
 
 For long details, use `--details-file notes.md`. To scaffold structured details automatically, use `--details-template`.
+
+Use the living-memory categories `playbook`, `known_fix`, `constraint`, `project_state`, and `active_work` for operational context. Structured CLI fields include `--triggers`, `--prerequisites`, `--steps`, `--verification`, `--follow-ups`, `--constraints`, `--open-questions`, `--confidence`, validity dates, commit/branch provenance, links, and `--last-verified`.
+
+For example, a release procedure can be saved as executable project memory:
+
+```bash
+memory save \
+  --title "Release playbook" \
+  --what "Verified steps for publishing a release" \
+  --category playbook \
+  --triggers "release,publish version" \
+  --prerequisites "clean worktree,release access" \
+  --steps "update changelog|bump version|run full tests|create tag" \
+  --verification "memory --version|git status --short" \
+  --last-verified "2026-07-12"
+```
+
+### Retrieval evaluation and maintenance
+
+Create a redacted golden set:
+
+```yaml
+queries:
+  - query: "how do we release"
+    project: my-project
+    expected:
+      - Release playbook       # exact title or memory UUID
+```
+
+Then evaluate and inspect retrieval:
+
+```bash
+memory evaluate examples/golden/real-world-redacted.yaml --limit 5
+memory evaluate examples/golden/real-world-redacted.yaml --sweep \
+  --min-recall 1.0 --max-negative-fpr 0.0
+memory search "how do we release" --explain
+memory feedback referenced <memory-id>
+memory feedback dismissed <memory-id>
+memory review --project my-project
+memory doctor --project my-project
+```
+
+Evaluation reports positive-query Recall@k, Precision@k, MRR, nDCG@k, irrelevant-result rate, negative-query false-positive rate, mean latency, and estimated context-token cost. Unlisted results are treated as irrelevant, so positive cases should label every result considered acceptable. Feedback is aggregate and local; prompts are not stored. Lifecycle review only proposes duplicate, contradiction, stale, superseded, completed-follow-up, and overly broad candidates—it does not mutate the vault.
+
+The checked-in `real-world-redacted.yaml` benchmark was curated from naturally occurring memories in a local vault across debugging, setup, UI, Docker, shell, and desktop-app work. Client and business projects were excluded. Queries are redacted paraphrases; expected values are exact stored titles. With `nomic-embed-text` and the documented `0.05` vector cutoff, its 22 cases currently achieve `1.0` Recall@5, MRR, and nDCG@5, with a `0.0` negative-query false-positive rate and roughly `0.692` Precision@5. Treat those numbers as a reproducible calibration snapshot, not a guarantee for other vaults or models.
+
+Golden sets should contain representative tasks, paraphrases, and deliberately unrelated queries. Use exact titles or memory UUIDs in `expected`, remove company names and sensitive identifiers, and never include secrets or credentials. Keep a dataset in version control only after reviewing every query and label.
+
+`--sweep` evaluates a grid of relevance and vector-similarity thresholds and ranks configurations by retrieval quality. `--min-recall` prevents a superficially precise configuration from being recommended when it drops required memories, while `--max-negative-fpr` rejects settings that answer unrelated negative controls. If no candidate satisfies both constraints, EchoVault reports that no safe threshold recommendation exists instead of changing defaults. Run calibration separately for every embedding model you support: similarity distributions are model-specific. In the real-world benchmark, relevant `nomic-embed-text` similarities were roughly `0.05–0.07`; a threshold such as `0.55` rejected every semantic candidate. Use `--min-relevance` and `--min-vector-similarity` to inspect one candidate without editing configuration.
+
+For the checked-in 22-query benchmark using `nomic-embed-text`, calibration produced:
+
+| Thresholds | Recall@5 | Precision@5 | Negative-query false positives | Estimated context tokens |
+|---|---:|---:|---:|---:|
+| `relevance=0.15`, `vector=0.55` | 100% | 25% | 50% | 10,517 |
+| `relevance=0.70`, `vector=0.05` | 100% | 69% | 0% | 3,827 |
+
+At `min_relevance=0.80`, recall dropped to 89%, so `0.70` was the strictest tested value that preserved every expected memory. These values are starting points for the default model, not universal constants.
 
 ### Terminal dashboard
 
@@ -234,12 +319,17 @@ Keybindings:
 
 | Agent | Setup command | What gets installed |
 |-------|-------------|-------------------|
-| Claude Code | `memory setup claude-code` | MCP server in `.mcp.json` (project) or `~/.claude.json` (global) |
+| Claude Code | `memory setup claude-code` | MCP server plus refreshed task-aware skill; `.mcp.json` (project) or `~/.claude.json` (global) |
 | Cursor | `memory setup cursor` | MCP server in `.cursor/mcp.json` |
 | Codex | `memory setup codex` | MCP server in `.codex/config.toml` + `AGENTS.md` fallback |
 | OpenCode | `memory setup opencode` | MCP server in `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
 
 All agents share the same memory vault at your effective `memory_home` path (default `~/.memory/`). A memory saved by Claude Code is searchable from Cursor, Codex, or OpenCode.
+
+For Claude Code, rerun `memory setup claude-code --project` after upgrading
+EchoVault. Setup preserves the MCP registration and installs or refreshes the
+task-aware skill that tells Claude to pass the current request as `query` and
+`agent: claude-code` before substantive work.
 
 ## Commands
 
@@ -250,9 +340,15 @@ All agents share the same memory vault at your effective `memory_home` path (def
 | `memory uninstall <agent>` | Remove MCP server config for an agent |
 | `memory save ...` | Save a memory (`--details-file` and `--details-template` supported) |
 | `memory search "query"` | Hybrid FTS + semantic search |
+| `memory search "query" --explain` | Search with raw ranking diagnostics |
 | `memory details <id>` | Full details for a memory |
 | `memory delete <id>` | Delete a memory by ID or prefix |
-| `memory context --project` | List memories for current project |
+| `memory context --project --query "task"` | Build task-aware context for the current project |
+| `memory config context [on\|off\|auto] --agent <agent>` | Show or set automatic context policy |
+| `memory evaluate <golden.yaml> [--sweep]` | Measure or calibrate retrieval quality |
+| `memory feedback <referenced\|dismissed> <ids>...` | Record local aggregate retrieval feedback |
+| `memory review` | Propose lifecycle cleanup without changing memories |
+| `memory doctor` | Diagnose vault, index, vectors, references, and lifecycle health |
 | `memory import` | Import markdown memories into the SQLite index |
 | `memory sessions` | List session files |
 | `memory dashboard` | Launch the terminal dashboard |

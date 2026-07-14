@@ -21,7 +21,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from memory.config import get_memory_home, load_config
+from memory.config import get_memory_home, load_config, resolve_context_mode
 from memory.db import DimensionMismatchError, MemoryDB
 from memory.embeddings.base import EmbeddingProvider
 from memory.markdown import (
@@ -272,6 +272,22 @@ class MemoryService:
                     impact=raw.impact,
                     tags=merged_tags,
                     details_append=details_append,
+                    structured_data={
+                        "triggers": raw.triggers, "prerequisites": raw.prerequisites,
+                        "steps": raw.steps, "verification": raw.verification,
+                        "follow_ups": raw.follow_ups, "constraints": raw.constraints,
+                        "alternatives_rejected": raw.alternatives_rejected,
+                        "open_questions": raw.open_questions,
+                    } if any((raw.triggers, raw.prerequisites, raw.steps, raw.verification,
+                              raw.follow_ups, raw.constraints, raw.alternatives_rejected,
+                              raw.open_questions)) else None,
+                    provenance={
+                        "confidence": raw.confidence, "valid_from": raw.valid_from,
+                        "valid_until": raw.valid_until, "commit_sha": raw.commit_sha,
+                        "branch": raw.branch, "links": raw.links,
+                        "last_verified": raw.last_verified,
+                    } if any((raw.confidence is not None, raw.valid_from, raw.valid_until,
+                              raw.commit_sha, raw.branch, raw.links, raw.last_verified)) else None,
                 )
 
                 # Re-embed the updated memory (non-fatal)
@@ -336,6 +352,7 @@ class MemoryService:
         source: Optional[str] = None,
         use_vectors: bool = True,
         include_archived: bool = False,
+        record_feedback: bool = True,
     ) -> list[dict]:
         """Search memories using hybrid FTS + vector search.
 
@@ -352,7 +369,7 @@ class MemoryService:
         """
         # FTS-only path when semantic search is disabled
         if not use_vectors:
-            return hybrid_search(
+            results = hybrid_search(
                 self.db,
                 None,
                 query,
@@ -360,12 +377,16 @@ class MemoryService:
                 project=project,
                 source=source,
                 include_archived=include_archived,
+                min_relevance=self.config.context.min_relevance,
             )
+            if record_feedback:
+                self.db.record_feedback([r["id"] for r in results])
+            return results
 
         # Use tiered search: FTS first, embed only if sparse results
         if self.vectors_available:
             try:
-                return tiered_search(
+                results = tiered_search(
                     self.db,
                     self.embedding_provider,
                     query,
@@ -373,14 +394,19 @@ class MemoryService:
                     project=project,
                     source=source,
                     include_archived=include_archived,
+                    min_relevance=self.config.context.min_relevance,
+                    min_vector_similarity=self.config.context.min_vector_similarity,
                 )
+                if record_feedback:
+                    self.db.record_feedback([r["id"] for r in results])
+                return results
             except DimensionMismatchError:
                 self._vectors_available = False
             except Exception:
                 pass
 
         # Fallback: FTS-only search
-        return tiered_search(
+        results = tiered_search(
             self.db,
             None,
             query,
@@ -388,7 +414,11 @@ class MemoryService:
             project=project,
             source=source,
             include_archived=include_archived,
+            min_relevance=self.config.context.min_relevance,
         )
+        if record_feedback:
+            self.db.record_feedback([r["id"] for r in results])
+        return results
 
     def _ollama_warm(self) -> bool:
         base_url = self.config.embedding.base_url or "http://localhost:11434"
@@ -416,6 +446,8 @@ class MemoryService:
         query: Optional[str] = None,
         semantic_mode: Optional[str] = None,
         topup_recent: Optional[bool] = None,
+        agent: Optional[str] = None,
+        token_budget: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         """Get memory pointers for context injection.
 
@@ -428,6 +460,9 @@ class MemoryService:
         Returns:
             Tuple of (list of memory pointer dicts, total count)
         """
+        mode, _mode_source = resolve_context_mode(self.config, agent)
+        if mode == "off":
+            return [], self.db.count_memories(project=project, source=source)
         total = self.db.count_memories(project=project, source=source)
 
         if semantic_mode is None:
@@ -452,20 +487,61 @@ class MemoryService:
                 include_archived=False,
             )
             if topup_recent and len(results) < limit:
-                recent = self.db.list_recent(
-                    limit=limit, project=project, source=source
+                # Fill unused space with operationally useful living memory before
+                # generic recency. Query relevance remains the primary signal.
+                candidates = self.db.list_memories(
+                    limit=max(limit * 4, 20), project=project, include_archived=False
                 )
+                if source:
+                    candidates = [r for r in candidates if r.get("source") == source]
+                category_priority = {
+                    "constraint": 0, "project_state": 1, "active_work": 2,
+                    "known_fix": 3, "playbook": 4, "decision": 5,
+                    "bug": 6, "pattern": 7,
+                }
+                candidates.sort(key=lambda r: (
+                    category_priority.get(r.get("category"), 20),
+                    -(r.get("retrieved_count") or 0),
+                ))
                 seen = {r["id"] for r in results}
-                for r in recent:
+                for r in candidates:
                     if r["id"] in seen:
                         continue
                     results.append(r)
                     if len(results) >= limit:
                         break
         else:
-            results = self.db.list_recent(limit=limit, project=project, source=source)
+            results = self.db.list_memories(
+                limit=max(limit * 4, 20), project=project, include_archived=False
+            )
+            if source:
+                results = [r for r in results if r.get("source") == source]
+            priority = {"project_state": 0, "constraint": 1, "active_work": 2, "playbook": 3, "known_fix": 4}
+            results.sort(key=lambda r: (
+                priority.get(r.get("category"), 20),
+                -(r.get("retrieved_count") or 0),
+            ))
 
-        return results, total
+        budget = token_budget or self.config.context.token_budget
+        packed: list[dict] = []
+        used = 0
+        for result in results:
+            text = " ".join(str(result.get(k, "") or "") for k in ("title", "what", "why", "impact"))
+            estimated = max(12, (len(text) + 3) // 4)
+            if packed and used + estimated > budget:
+                continue
+            result = dict(result)
+            result["estimated_tokens"] = estimated
+            packed.append(result)
+            used += estimated
+            if len(packed) >= limit:
+                break
+        self.db.record_feedback([r["id"] for r in packed])
+        return packed, total
+
+    def context_policy(self, agent: Optional[str] = None) -> dict[str, object]:
+        mode, source = resolve_context_mode(self.config, agent)
+        return {"mode": mode, "source": source, "enabled": mode != "off", "agent": agent}
 
     def list_memories(
         self,
@@ -1067,6 +1143,7 @@ class MemoryService:
                 why: Optional[str] = None
                 impact: Optional[str] = None
                 source: Optional[str] = None
+                living_data: dict = {}
                 details_lines: list[str] = []
                 in_details = False
 
@@ -1095,6 +1172,11 @@ class MemoryService:
                         impact = stripped[len("**Impact:**"):].strip()
                     elif stripped.startswith("**Source:**"):
                         source = stripped[len("**Source:**"):].strip()
+                    elif stripped.startswith("**Living Memory:**"):
+                        try:
+                            living_data = json.loads(stripped[len("**Living Memory:**"):].strip())
+                        except json.JSONDecodeError:
+                            living_data = {}
 
                     i += 1
 
@@ -1116,6 +1198,7 @@ class MemoryService:
                         "file_path": filepath,
                         "section_anchor": cls._make_section_anchor(title, occurrence),
                         "details": "\n".join(details_lines).strip() or None,
+                        "living_data": living_data,
                     })
                 continue
 
@@ -1202,6 +1285,14 @@ class MemoryService:
                             section_anchor=mem_data["section_anchor"],
                             created_at=now,
                             updated_at=now,
+                            structured_data=mem_data.get("living_data", {}).get("structured_data", {}),
+                            confidence=mem_data.get("living_data", {}).get("confidence"),
+                            valid_from=mem_data.get("living_data", {}).get("valid_from"),
+                            valid_until=mem_data.get("living_data", {}).get("valid_until"),
+                            commit_sha=mem_data.get("living_data", {}).get("commit_sha"),
+                            branch=mem_data.get("living_data", {}).get("branch"),
+                            links=mem_data.get("living_data", {}).get("links", []),
+                            last_verified=mem_data.get("living_data", {}).get("last_verified"),
                         )
                         self.db.insert_memory(mem, details=mem_data.get("details"))
                         existing.add(key)

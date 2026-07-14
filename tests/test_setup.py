@@ -92,13 +92,50 @@ class TestClaudeCodeSetup:
         data = json.loads(_mcp_json_path(claude_home).read_text())
         assert "echovault" in data["mcpServers"]
 
-    def test_removes_old_skill_on_setup(self, claude_home):
+    def test_refreshes_old_skill_on_setup(self, claude_home):
         from memory.setup import setup_claude_code
         skill_dir = claude_home / "skills" / "echovault"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("old skill")
         setup_claude_code(str(claude_home), project=True)
-        assert not skill_dir.exists()
+        skill_path = skill_dir / "SKILL.md"
+        assert skill_path.exists()
+        content = skill_path.read_text()
+        assert "old skill" not in content
+        assert '"agent": "claude-code"' in content
+        assert "<current user request>" in content
+
+    def test_installs_task_aware_skill(self, claude_home):
+        from memory.setup import setup_claude_code
+
+        setup_claude_code(str(claude_home), project=True)
+
+        content = (claude_home / "skills" / "echovault" / "SKILL.md").read_text()
+        assert "memory_context" in content
+        assert "--agent claude-code" in content
+        assert "token_budget" in content
+
+    def test_second_setup_keeps_current_skill_unchanged(self, claude_home):
+        from memory.setup import setup_claude_code
+
+        setup_claude_code(str(claude_home), project=True)
+        skill_path = claude_home / "skills" / "echovault" / "SKILL.md"
+        first = skill_path.read_text()
+        result = setup_claude_code(str(claude_home), project=True)
+
+        assert skill_path.read_text() == first
+        assert result["message"] == "Already installed"
+
+    def test_packaged_fallback_skill_is_task_aware(self, claude_home, monkeypatch):
+        import memory.setup as setup_module
+
+        monkeypatch.setattr(setup_module, "_get_skill_md_path", lambda: "")
+        setup_module.setup_claude_code(str(claude_home), project=True)
+
+        content = (claude_home / "skills" / "echovault" / "SKILL.md").read_text()
+        assert 'agent="claude-code"' in content
+        assert "--agent claude-code" in content
+        assert "<current user request>" in content
 
     def test_returns_success_result(self, claude_home):
         from memory.setup import setup_claude_code

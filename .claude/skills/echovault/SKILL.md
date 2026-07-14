@@ -15,7 +15,7 @@ Use the current user request as the query so retrieval is task-aware. Prefer the
 ```json
 {
   "project": "<current-project>",
-  "agent": "{{AGENT_NAME}}",
+  "agent": "claude-code",
   "query": "<current user request>",
   "token_budget": 1200
 }
@@ -24,7 +24,7 @@ Use the current user request as the query so retrieval is task-aware. Prefer the
 CLI fallback:
 
 ```bash
-memory context --project --agent {{AGENT_NAME}} --query "<current user request>"
+memory context --project --agent claude-code --query "<current user request>"
 ```
 
 If the context pack is insufficient, use `memory_search` for a narrower topic.
@@ -47,7 +47,7 @@ memory save \
   --tags "tag1,tag2,tag3" \
   --category "<category>" \
   --related-files "path/to/file1,path/to/file2" \
-  --source "{{AGENT_NAME}}" \
+  --source "claude-code" \
   --details "Context:
 
              Options considered:
@@ -62,7 +62,7 @@ memory save \
 Categories: `decision`, `bug`, `pattern`, `learning`, `context`, `playbook`,
 `known_fix`, `constraint`, `project_state`, `active_work`.
 
-Use `--source {{AGENT_NAME}}` to identify the agent.
+Use `--source claude-code` to identify the agent.
 
 ### What to save
 

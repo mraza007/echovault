@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-VALID_CATEGORIES = ("decision", "pattern", "bug", "context", "learning")
+VALID_CATEGORIES = (
+    "decision", "pattern", "bug", "context", "learning", "playbook",
+    "known_fix", "constraint", "project_state", "active_work",
+)
 
 CATEGORY_HEADINGS = {
     "decision": "Decisions",
@@ -14,6 +17,11 @@ CATEGORY_HEADINGS = {
     "bug": "Bugs Fixed",
     "context": "Context",
     "learning": "Learnings",
+    "playbook": "Playbooks",
+    "known_fix": "Known Fixes",
+    "constraint": "Constraints",
+    "project_state": "Project State",
+    "active_work": "Active Work",
 }
 
 
@@ -30,6 +38,21 @@ class RawMemoryInput:
     related_files: list[str] = field(default_factory=list)
     details: Optional[str] = None
     source: Optional[str] = None
+    triggers: list[str] = field(default_factory=list)
+    prerequisites: list[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
+    verification: list[str] = field(default_factory=list)
+    follow_ups: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    alternatives_rejected: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    commit_sha: Optional[str] = None
+    branch: Optional[str] = None
+    links: list[str] = field(default_factory=list)
+    last_verified: Optional[str] = None
 
 
 @dataclass
@@ -54,6 +77,14 @@ class Memory:
     archived_at: Optional[str] = None
     archive_reason: Optional[str] = None
     superseded_by: Optional[str] = None
+    structured_data: dict = field(default_factory=dict)
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    commit_sha: Optional[str] = None
+    branch: Optional[str] = None
+    links: list[str] = field(default_factory=list)
+    last_verified: Optional[str] = None
 
     @staticmethod
     def from_raw(raw: RawMemoryInput, project: str, file_path: str = "") -> Memory:
@@ -75,6 +106,16 @@ class Memory:
             section_anchor=anchor,
             created_at=now,
             updated_at=now,
+            structured_data={
+                "triggers": raw.triggers, "prerequisites": raw.prerequisites,
+                "steps": raw.steps, "verification": raw.verification,
+                "follow_ups": raw.follow_ups, "constraints": raw.constraints,
+                "alternatives_rejected": raw.alternatives_rejected,
+                "open_questions": raw.open_questions,
+            },
+            confidence=raw.confidence, valid_from=raw.valid_from,
+            valid_until=raw.valid_until, commit_sha=raw.commit_sha,
+            branch=raw.branch, links=raw.links, last_verified=raw.last_verified,
         )
 
 

@@ -14,6 +14,7 @@ from memory.config import (
     load_config,
     resolve_memory_home,
     set_persisted_memory_home,
+    resolve_context_mode,
 )
 
 
@@ -25,6 +26,19 @@ def test_default_config_has_correct_defaults():
     assert config.embedding.model == "nomic-embed-text"
     assert config.embedding.base_url is None
     assert config.embedding.api_key is None
+    assert config.context.mode == "auto"
+    assert config.context.token_budget == 1200
+    assert config.context.min_relevance == 0.7
+    assert config.context.min_vector_similarity == 0.05
+
+
+def test_context_policy_precedence(monkeypatch):
+    config = MemoryConfig()
+    config.context.mode = "off"
+    config.context.agent_modes = {"codex": "on"}
+    assert resolve_context_mode(config, "codex") == ("on", "agent:codex")
+    monkeypatch.setenv("MEMORY_CONTEXT", "off")
+    assert resolve_context_mode(config, "codex") == ("off", "env")
 
 
 def test_load_config_with_all_fields():

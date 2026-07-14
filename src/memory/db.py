@@ -171,6 +171,16 @@ class MemoryDB:
             cursor.execute("ALTER TABLE memories ADD COLUMN archive_reason TEXT")
         if "superseded_by" not in columns:
             cursor.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT")
+        additive_columns = {
+            "structured_data": "TEXT DEFAULT '{}'", "confidence": "REAL",
+            "valid_from": "TEXT", "valid_until": "TEXT", "commit_sha": "TEXT",
+            "branch": "TEXT", "links": "TEXT DEFAULT '[]'", "last_verified": "TEXT",
+            "retrieved_count": "INTEGER DEFAULT 0", "details_opened_count": "INTEGER DEFAULT 0",
+            "dismissed_count": "INTEGER DEFAULT 0", "last_used_at": "TEXT",
+        }
+        for name, sql_type in additive_columns.items():
+            if name not in columns:
+                cursor.execute(f"ALTER TABLE memories ADD COLUMN {name} {sql_type}")
 
         # Create vec table if dimension is already known (e.g. reopening existing DB)
         dim = self.get_embedding_dim()
@@ -262,13 +272,17 @@ class MemoryDB:
             INSERT INTO memories (
                 id, title, what, why, impact, tags, category, project,
                 source, related_files, file_path, section_anchor,
-                created_at, updated_at, status, archived_at, archive_reason, superseded_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, status, archived_at, archive_reason, superseded_by,
+                structured_data, confidence, valid_from, valid_until, commit_sha, branch,
+                links, last_verified
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             mem.id, mem.title, mem.what, mem.why, mem.impact,
             tags_json, mem.category, mem.project, mem.source,
             related_files_json, mem.file_path, mem.section_anchor,
-            mem.created_at, mem.updated_at, mem.status, mem.archived_at, mem.archive_reason, mem.superseded_by
+            mem.created_at, mem.updated_at, mem.status, mem.archived_at, mem.archive_reason, mem.superseded_by,
+            json.dumps(mem.structured_data), mem.confidence, mem.valid_from, mem.valid_until,
+            mem.commit_sha, mem.branch, json.dumps(mem.links), mem.last_verified
         ))
 
         rowid = cursor.lastrowid
@@ -343,6 +357,7 @@ class MemoryDB:
 
         row = cursor.fetchone()
         if row:
+            self.record_feedback([row["memory_id"]], "details_opened")
             return MemoryDetail(memory_id=row["memory_id"], body=row["body"])
         return None
 
@@ -354,6 +369,8 @@ class MemoryDB:
         impact: str | None = None,
         tags: list[str] | None = None,
         details_append: str | None = None,
+        structured_data: dict | None = None,
+        provenance: dict | None = None,
     ) -> bool:
         """Update an existing memory's fields and increment updated_count.
 
@@ -395,6 +412,16 @@ class MemoryDB:
         if tags is not None:
             sets.append("tags = ?")
             params.append(json.dumps(tags))
+        if structured_data is not None:
+            sets.append("structured_data = ?")
+            params.append(json.dumps(structured_data))
+        for key in ("confidence", "valid_from", "valid_until", "commit_sha", "branch", "last_verified"):
+            if provenance and key in provenance:
+                sets.append(f"{key} = ?")
+                params.append(provenance[key])
+        if provenance and "links" in provenance:
+            sets.append("links = ?")
+            params.append(json.dumps(provenance["links"]))
 
         params.append(full_id)
         cursor.execute(f"UPDATE memories SET {', '.join(sets)} WHERE id = ?", params)
@@ -494,6 +521,28 @@ class MemoryDB:
         """, params)
 
         return [dict(row) for row in cursor.fetchall()]
+
+    def record_feedback(self, memory_ids: list[str], event: str = "retrieved") -> int:
+        """Record local, aggregate retrieval feedback without storing prompts."""
+        columns = {
+            "retrieved": "retrieved_count", "details_opened": "details_opened_count",
+            "dismissed": "dismissed_count", "referenced": "retrieved_count",
+        }
+        column = columns.get(event)
+        if not column or not memory_ids:
+            return 0
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.cursor()
+        count = 0
+        for memory_id in memory_ids:
+            cursor.execute(
+                f"UPDATE memories SET {column} = COALESCE({column}, 0) + 1, last_used_at = ? WHERE id LIKE ?",
+                (now, memory_id + "%"),
+            )
+            count += cursor.rowcount
+        self.conn.commit()
+        return count
 
     def vector_search(
         self,

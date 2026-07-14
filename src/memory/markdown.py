@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import locale
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ class SessionEntry:
     archive_reason: Optional[str] = None
     superseded_by: Optional[str] = None
     section_anchor: Optional[str] = None
+    living_data: dict = None
 
 
 @dataclass
@@ -93,6 +95,12 @@ def render_section(mem: Memory, details: Optional[str] = None) -> str:
             archive_reason=mem.archive_reason,
             superseded_by=mem.superseded_by,
             section_anchor=mem.section_anchor,
+            living_data={
+                "structured_data": mem.structured_data, "confidence": mem.confidence,
+                "valid_from": mem.valid_from, "valid_until": mem.valid_until,
+                "commit_sha": mem.commit_sha, "branch": mem.branch,
+                "links": mem.links, "last_verified": mem.last_verified,
+            },
         )
     )
 
@@ -112,6 +120,9 @@ def render_entry(entry: SessionEntry) -> str:
 
     if entry.source is not None:
         lines.append(f"**Source:** {entry.source}")
+    living_data = {k: v for k, v in (entry.living_data or {}).items() if v not in (None, [], {}, "")}
+    if living_data:
+        lines.append("**Living Memory:** " + json.dumps(living_data, sort_keys=True))
 
     if entry.status == "archived":
         if entry.category is not None:
@@ -249,6 +260,12 @@ def write_session_memory(
             archived_at=mem.archived_at,
             archive_reason=mem.archive_reason,
             superseded_by=mem.superseded_by,
+            living_data={
+                "structured_data": mem.structured_data, "confidence": mem.confidence,
+                "valid_from": mem.valid_from, "valid_until": mem.valid_until,
+                "commit_sha": mem.commit_sha, "branch": mem.branch,
+                "links": mem.links, "last_verified": mem.last_verified,
+            },
         )
     )
     assign_entry_anchors(document.entries)
@@ -358,6 +375,11 @@ def _parse_entries(body: str) -> list[SessionEntry]:
                     entry.why = stripped[len("**Why:**"):].strip()
                 elif stripped.startswith("**Impact:**"):
                     entry.impact = stripped[len("**Impact:**"):].strip()
+                elif stripped.startswith("**Living Memory:**"):
+                    try:
+                        entry.living_data = json.loads(stripped[len("**Living Memory:**"):].strip())
+                    except json.JSONDecodeError:
+                        entry.living_data = {}
                 elif stripped.startswith("**Source:**"):
                     entry.source = stripped[len("**Source:**"):].strip()
                 elif stripped.startswith("**Category:**"):

@@ -12,7 +12,10 @@ from mcp.types import TextContent, Tool
 from memory.core import MemoryService
 from memory.models import RawMemoryInput
 
-VALID_CATEGORIES = ("decision", "bug", "pattern", "learning", "context")
+VALID_CATEGORIES = (
+    "decision", "bug", "pattern", "learning", "context", "playbook",
+    "known_fix", "constraint", "project_state", "active_work",
+)
 
 SAVE_DESCRIPTION = """Save a memory for future sessions. You MUST call this before ending any session where you made changes, fixed bugs, made decisions, or learned something. This is not optional — failing to save means the next session starts from zero.
 
@@ -34,9 +37,9 @@ When filling `details`, prefer this structure:
 - Tradeoffs
 - Follow-up"""
 
-SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Returns matching memories ranked by relevance. You MUST call this at session start before doing any work, and whenever the user's request relates to a topic that may have prior context."""
+SEARCH_DESCRIPTION = """Search memories using keyword and semantic search. Use this when the task-aware memory_context pack is insufficient or when investigating a narrower topic. Explicit search remains available even when automatic context is disabled."""
 
-CONTEXT_DESCRIPTION = """Get memory context for the current project. You MUST call this at session start to load prior decisions, bugs, and context. Do not skip this step — prior sessions contain decisions and context that directly affect your current task. Use memory_search for specific topics."""
+CONTEXT_DESCRIPTION = """Get a task-aware living-memory context pack for the current project. You MUST call this before feature development, planning, debugging, or architecture work. Pass the current user request verbatim or as a faithful task summary in `query`, and pass your runtime identity in `agent` (for example `claude-code` or `codex`) so policy overrides work. The response includes summaries, structured playbooks, constraints, provenance, and token estimates directly to avoid extra round trips. If policy reports disabled, continue without automatic context; explicit memory_search and memory_save still work."""
 
 
 def handle_memory_save(
@@ -50,6 +53,21 @@ def handle_memory_save(
     related_files: Optional[list[str]] = None,
     details: Optional[str] = None,
     project: Optional[str] = None,
+    triggers: Optional[list[str]] = None,
+    prerequisites: Optional[list[str]] = None,
+    steps: Optional[list[str]] = None,
+    verification: Optional[list[str]] = None,
+    follow_ups: Optional[list[str]] = None,
+    constraints: Optional[list[str]] = None,
+    alternatives_rejected: Optional[list[str]] = None,
+    open_questions: Optional[list[str]] = None,
+    confidence: Optional[float] = None,
+    valid_from: Optional[str] = None,
+    valid_until: Optional[str] = None,
+    commit_sha: Optional[str] = None,
+    branch: Optional[str] = None,
+    links: Optional[list[str]] = None,
+    last_verified: Optional[str] = None,
 ) -> str:
     """Handle memory_save tool call. Returns JSON string."""
     project = project or os.path.basename(os.getcwd())
@@ -66,6 +84,13 @@ def handle_memory_save(
         category=category,
         related_files=related_files or [],
         details=details,
+        triggers=triggers or [], prerequisites=prerequisites or [], steps=steps or [],
+        verification=verification or [], follow_ups=follow_ups or [],
+        constraints=constraints or [], open_questions=open_questions or [],
+        alternatives_rejected=alternatives_rejected or [],
+        confidence=confidence, valid_from=valid_from, valid_until=valid_until,
+        commit_sha=commit_sha, branch=branch, links=links or [],
+        last_verified=last_verified,
     )
 
     result = service.save(raw, project=project)
@@ -114,14 +139,22 @@ def handle_memory_context(
     service: MemoryService,
     project: Optional[str] = None,
     limit: int = 10,
+    query: Optional[str] = None,
+    agent: Optional[str] = None,
+    token_budget: Optional[int] = None,
 ) -> str:
     """Handle memory_context tool call. Returns JSON string."""
     project = project or os.path.basename(os.getcwd())
 
+    policy = service.context_policy(agent)
+    if not policy["enabled"]:
+        return json.dumps({"total": service.db.count_memories(project=project), "showing": 0, "memories": [], "disabled": True, "policy": policy})
     results, total = service.get_context(
         limit=limit,
         project=project,
-        semantic_mode="never",
+        query=query,
+        agent=agent,
+        token_budget=token_budget,
     )
 
     memories = []
@@ -147,9 +180,20 @@ def handle_memory_context(
         memories.append({
             "id": r["id"],
             "title": r.get("title", "Untitled"),
+            "what": r.get("what"),
+            "why": r.get("why"),
+            "impact": r.get("impact"),
             "category": r.get("category", ""),
             "tags": tags_list,
             "date": date_display,
+            "structured": json.loads(r.get("structured_data") or "{}") if isinstance(r.get("structured_data"), str) else (r.get("structured_data") or {}),
+            "provenance": {
+                key: r.get(key) for key in (
+                    "confidence", "valid_from", "valid_until", "commit_sha",
+                    "branch", "last_verified",
+                ) if r.get(key) is not None
+            },
+            "estimated_tokens": r.get("estimated_tokens"),
         })
 
     return json.dumps({
@@ -192,6 +236,19 @@ def _create_server(service: MemoryService) -> Server:
                             ),
                         },
                         "project": {"type": "string", "description": "Project name. Auto-detected from cwd if omitted."},
+                        "triggers": {"type": "array", "items": {"type": "string"}},
+                        "prerequisites": {"type": "array", "items": {"type": "string"}},
+                        "steps": {"type": "array", "items": {"type": "string"}},
+                        "verification": {"type": "array", "items": {"type": "string"}},
+                        "follow_ups": {"type": "array", "items": {"type": "string"}},
+                        "constraints": {"type": "array", "items": {"type": "string"}},
+                        "alternatives_rejected": {"type": "array", "items": {"type": "string"}},
+                        "open_questions": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "valid_from": {"type": "string"}, "valid_until": {"type": "string"},
+                        "commit_sha": {"type": "string"}, "branch": {"type": "string"},
+                        "links": {"type": "array", "items": {"type": "string"}},
+                        "last_verified": {"type": "string"},
                     },
                     "required": ["title", "what"],
                 },
@@ -217,6 +274,9 @@ def _create_server(service: MemoryService) -> Server:
                     "properties": {
                         "project": {"type": "string", "description": "Project name. Auto-detected from cwd if omitted."},
                         "limit": {"type": "integer", "default": 10, "description": "Max memories"},
+                        "query": {"type": "string", "description": "Required for task-aware work: the current user request or a faithful task summary."},
+                        "agent": {"type": "string", "description": "Your runtime identity for policy overrides: claude-code, codex, cursor, or opencode."},
+                        "token_budget": {"type": "integer", "default": 1200, "description": "Approximate context token budget."},
                     },
                 },
             ),

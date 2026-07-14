@@ -8,3 +8,4 @@ build/
 models/
 docs/
 target/
+.DS_Store

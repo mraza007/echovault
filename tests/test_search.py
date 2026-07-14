@@ -243,6 +243,32 @@ class TestTieredSearch:
         embed_provider.embed.assert_called_once()
         assert len(results) >= 1
 
+    def test_tiered_search_calls_embedding_when_many_hits_have_low_query_coverage(self):
+        """A generic shared word must not make several FTS hits look sufficient."""
+        from unittest.mock import MagicMock
+        from memory.search import tiered_search
+
+        db = MagicMock()
+        db.fts_search.return_value = [
+            {"id": "1", "title": "Session version bump", "score": 10.0},
+            {"id": "2", "title": "Session project overview", "score": 9.0},
+            {"id": "3", "title": "Session dashboard notes", "score": 8.0},
+        ]
+        db.vector_search.return_value = [
+            {"id": "4", "title": "Reusable agent workflows", "score": 0.9},
+        ]
+        embed_provider = MagicMock()
+        embed_provider.embed.return_value = [0.1] * 8
+
+        results = tiered_search(
+            db, embed_provider,
+            "keep the assistant from relearning established workflows every session",
+            limit=5,
+        )
+
+        embed_provider.embed.assert_called_once()
+        assert any(result["id"] == "4" for result in results)
+
     def test_tiered_search_prefers_semantic_top_hit_when_single_lexical_result_conflicts(self):
         """A lone lexical hit should not dominate a stronger semantic result."""
         from unittest.mock import MagicMock

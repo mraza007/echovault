@@ -17,6 +17,7 @@ from memory.config import (
     load_config,
     resolve_memory_home,
     set_persisted_memory_home,
+    resolve_context_mode,
 )
 from memory.core import MemoryService
 from memory.models import RawMemoryInput
@@ -109,9 +110,44 @@ embedding:
 # How memories are retrieved at session start.
 # "auto" uses vectors when available, falls back to keywords.
 context:
+  mode: auto                    # on | off | auto
   semantic: auto                # auto | always | never
   topup_recent: true            # also include recent memories
+  token_budget: 1200            # approximate injected-context budget
+  min_relevance: 0.70           # real-world nomic benchmark default
+  min_vector_similarity: 0.05   # nomic-embed-text default; calibrate per model
+  agent_modes: {}               # e.g. {codex: on, claude-code: off}
 """
+
+
+def _write_context_mode(mode: str, agent: str | None = None) -> None:
+    home = get_memory_home()
+    path = os.path.join(home, "config.yaml")
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        data = {}
+    context_data = data.setdefault("context", {})
+    if agent:
+        context_data.setdefault("agent_modes", {})[agent] = mode
+    else:
+        context_data["mode"] = mode
+    os.makedirs(home, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+@config.command("context")
+@click.argument("mode", required=False, type=click.Choice(["on", "off", "auto"]))
+@click.option("--agent", default=None, help="Set or inspect an agent-specific policy")
+def config_context(mode, agent):
+    """Show or set automatic agent-context policy."""
+    if mode:
+        _write_context_mode(mode, agent)
+    cfg = load_config(os.path.join(get_memory_home(), "config.yaml"))
+    effective, source = resolve_context_mode(cfg, agent)
+    click.echo(f"context: {effective} ({source})")
 
 
 @config.command("init")
@@ -142,7 +178,10 @@ def config_init(force):
 @click.option("--tags", default="", help="Comma-separated tags")
 @click.option(
     "--category",
-    type=click.Choice(["decision", "pattern", "bug", "context", "learning"]),
+    type=click.Choice([
+        "decision", "pattern", "bug", "context", "learning", "playbook",
+        "known_fix", "constraint", "project_state", "active_work",
+    ]),
     default=None,
     help="Category of the memory",
 )
@@ -152,6 +191,21 @@ def config_init(force):
 @click.option("--details-template", is_flag=True, default=False, help="Use a structured details template")
 @click.option("--source", default=None, help="Source of the memory")
 @click.option("--project", default=None, help="Project name")
+@click.option("--triggers", default="", help="Comma-separated playbook triggers")
+@click.option("--prerequisites", default="", help="Comma-separated prerequisites")
+@click.option("--steps", default="", help="Pipe-separated procedure steps")
+@click.option("--verification", default="", help="Pipe-separated verification commands")
+@click.option("--follow-ups", default="", help="Pipe-separated follow-ups")
+@click.option("--constraints", default="", help="Pipe-separated constraints")
+@click.option("--alternatives-rejected", default="", help="Pipe-separated rejected alternatives")
+@click.option("--open-questions", default="", help="Pipe-separated open questions")
+@click.option("--confidence", type=click.FloatRange(0.0, 1.0), default=None)
+@click.option("--valid-from", default=None, help="ISO date/time when valid")
+@click.option("--valid-until", default=None, help="ISO date/time expiry")
+@click.option("--commit-sha", default=None)
+@click.option("--branch", default=None)
+@click.option("--links", default="", help="Comma-separated provenance links")
+@click.option("--last-verified", default=None, help="ISO date/time last verified")
 def save(
     title,
     what,
@@ -165,6 +219,9 @@ def save(
     details_template,
     source,
     project,
+    triggers, prerequisites, steps, verification, follow_ups, constraints, alternatives_rejected,
+    open_questions, confidence, valid_from, valid_until, commit_sha, branch,
+    links, last_verified,
 ):
     """Save a memory to the current session."""
     project = project or os.path.basename(os.getcwd())
@@ -195,6 +252,18 @@ def save(
         related_files=file_list,
         details=resolved_details,
         source=source,
+        triggers=[v.strip() for v in triggers.split(",") if v.strip()],
+        prerequisites=[v.strip() for v in prerequisites.split(",") if v.strip()],
+        steps=[v.strip() for v in steps.split("|") if v.strip()],
+        verification=[v.strip() for v in verification.split("|") if v.strip()],
+        follow_ups=[v.strip() for v in follow_ups.split("|") if v.strip()],
+        constraints=[v.strip() for v in constraints.split("|") if v.strip()],
+        alternatives_rejected=[v.strip() for v in alternatives_rejected.split("|") if v.strip()],
+        open_questions=[v.strip() for v in open_questions.split("|") if v.strip()],
+        confidence=confidence, valid_from=valid_from, valid_until=valid_until,
+        commit_sha=commit_sha, branch=branch,
+        links=[v.strip() for v in links.split(",") if v.strip()],
+        last_verified=last_verified,
     )
 
     svc = MemoryService()
@@ -217,7 +286,8 @@ def save(
     help="Filter to current project (current directory name)",
 )
 @click.option("--source", default=None, help="Filter by source")
-def search(query, limit, project, source):
+@click.option("--explain", is_flag=True, help="Show raw ranking diagnostics")
+def search(query, limit, project, source, explain):
     """Search memories using hybrid FTS5 + semantic search."""
     project_name = os.path.basename(os.getcwd()) if project else None
 
@@ -250,6 +320,8 @@ def search(query, limit, project, source):
 
         if has_details:
             click.echo(f"     Details: available (use `memory details {r['id'][:12]}`)")
+        if explain:
+            click.echo("     Ranking: " + yaml.safe_dump(r.get("score_explain", {"mode": "fallback", "score": score}), default_flow_style=True).strip())
 
 
 @main.command()
@@ -291,6 +363,8 @@ def delete(memory_id):
 @click.option("--source", default=None, help="Filter by source")
 @click.option("--limit", default=10, help="Maximum number of pointers")
 @click.option("--query", default=None, help="Semantic search query for filtering")
+@click.option("--agent", default=None, help="Agent name for policy override")
+@click.option("--token-budget", type=int, default=None, help="Approximate context token budget")
 @click.option(
     "--semantic",
     "semantic_mode",
@@ -317,7 +391,7 @@ def delete(memory_id):
     default="hook",
     help="Output format",
 )
-def context(project, source, limit, query, semantic_mode, show_config, output_format):
+def context(project, source, limit, query, agent, token_budget, semantic_mode, show_config, output_format):
     """Output memory pointers for agent context injection."""
     import json
 
@@ -332,12 +406,19 @@ def context(project, source, limit, query, semantic_mode, show_config, output_fo
     project_name = os.path.basename(os.getcwd()) if project else None
 
     svc = MemoryService()
+    policy = svc.context_policy(agent)
+    if not policy["enabled"]:
+        click.echo(f"Automatic memory context is disabled ({policy['source']}).")
+        svc.close()
+        return
     results, total = svc.get_context(
         limit=limit,
         project=project_name,
         source=source,
         query=query,
         semantic_mode=semantic_mode,
+        agent=agent,
+        token_budget=token_budget,
     )
     svc.close()
 
@@ -379,10 +460,74 @@ def context(project, source, limit, query, semantic_mode, show_config, output_fo
         tags_part = f" [{','.join(tags_list)}]" if tags_list else ""
 
         click.echo(f"- [{date_display}] {title}{cat_part}{tags_part}")
+        if query and r.get("what"):
+            click.echo(f"  {r['what']}")
 
     if output_format == "agents-md":
         click.echo("")
     click.echo('Use `memory search <query>` for full details on any memory.')
+
+
+@main.command("evaluate")
+@click.argument("golden_set", type=click.Path(exists=True, dir_okay=False))
+@click.option("--limit", default=5)
+@click.option("--project", default=None)
+@click.option("--sweep", is_flag=True, help="Calibrate relevance thresholds over a standard grid")
+@click.option("--min-recall", default=1.0, type=click.FloatRange(0.0, 1.0), help="Minimum recall required for sweep recommendations")
+@click.option("--max-negative-fpr", default=0.0, type=click.FloatRange(0.0, 1.0), help="Maximum unrelated-query false-positive rate")
+@click.option("--min-relevance", default=None, type=click.FloatRange(0.0, 1.0), help="Temporarily override ranked-result threshold")
+@click.option("--min-vector-similarity", default=None, type=click.FloatRange(0.0, 1.0), help="Temporarily override vector threshold")
+def evaluate_cmd(golden_set, limit, project, sweep, min_recall, max_negative_fpr, min_relevance, min_vector_similarity):
+    """Evaluate retrieval against a redacted YAML golden set."""
+    from memory.evaluation import evaluate, load_golden_set, sweep_thresholds
+    svc = MemoryService()
+    cases = load_golden_set(golden_set)
+    if min_relevance is not None:
+        svc.config.context.min_relevance = min_relevance
+    if min_vector_similarity is not None:
+        svc.config.context.min_vector_similarity = min_vector_similarity
+    report = (
+        sweep_thresholds(
+            svc, cases, limit=limit, project=project,
+            min_recall=min_recall, max_negative_fpr=max_negative_fpr,
+        )
+        if sweep else evaluate(svc, cases, limit=limit, project=project)
+    )
+    svc.close()
+    click.echo(yaml.safe_dump(report, sort_keys=False))
+
+
+@main.command("feedback")
+@click.argument("event", type=click.Choice(["referenced", "dismissed"]))
+@click.argument("memory_ids", nargs=-1, required=True)
+def feedback_cmd(event, memory_ids):
+    """Record local retrieval feedback for one or more memories."""
+    svc = MemoryService()
+    count = svc.db.record_feedback(list(memory_ids), event)
+    svc.close()
+    click.echo(f"Recorded {event} for {count} memories.")
+
+
+@main.command("review")
+@click.option("--project", default=None)
+def review_cmd(project):
+    """Propose lifecycle cleanup without changing memories."""
+    from memory.health import lifecycle_review
+    svc = MemoryService()
+    report = lifecycle_review(svc.db, project)
+    svc.close()
+    click.echo(yaml.safe_dump(report, sort_keys=False))
+
+
+@main.command("doctor")
+@click.option("--project", default=None)
+def doctor_cmd(project):
+    """Check vault, index, vectors, references, and lifecycle health."""
+    from memory.health import doctor
+    svc = MemoryService()
+    report = doctor(svc, project)
+    svc.close()
+    click.echo(yaml.safe_dump(report, sort_keys=False))
 
 
 @main.command("import")

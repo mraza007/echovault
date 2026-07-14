@@ -1,0 +1,92 @@
+# Real-world, redacted benchmark curated from naturally occurring memories in
+# ~/.memory/vault. Queries paraphrase the original work; expected values are
+# exact stored titles. Client/business projects and sensitive details are omitted.
+queries:
+  - query: "why must the desktop todo app run through Tauri instead of Vite in a browser"
+    project: todo-app
+    expected: ["Run todo app through Tauri shell"]
+
+  - query: "tasks around midnight show tomorrow because SQLite and the UI disagree on the date"
+    project: todo-app
+    expected: ["SQLite date('now') is UTC — use 'localtime' in desktop apps"]
+
+  - query: "what stack and state-management libraries does the desktop todo app use"
+    project: todo-app
+    expected: ["Slate todo app: Tauri + SQLite stack and design"]
+
+  - query: "what defects were found during the todo app code review"
+    project: todo-app
+    expected: ["Todo app code review findings"]
+
+  - query: "Turbopack cannot parse the service routing simulator because of JSX text"
+    project: learn-kubernetes
+    expected: ["Fixed JSX parse error in service routing simulation"]
+
+  - query: "scrolling causes redundant Zustand progress updates and rerenders"
+    project: learn-kubernetes
+    expected: ["Avoid redundant progress updates for scroll-driven state"]
+
+  - query: "copy command feedback timers update React components after unmount"
+    project: learn-kubernetes
+    expected: ["Cleanup copy-command feedback timers in layer components"]
+
+  - query: "what product decisions define version one of the beginner Kubernetes tutorial"
+    project: learn-kubernetes
+    expected: ["Kubernetes tutorial V1 product decisions"]
+
+  - query: "changing directories should not make fnm prompt to install Node versions"
+    project: shell-optimization
+    expected: ["User zshrc: removed fnm --use-on-cd flag"]
+
+  - query: "switching Node versions repeatedly reinstalls global npm packages and fails on Node 18"
+    project: shell-optimization
+    expected: ["Fixed fnm auto-restore breaking on Node version switch"]
+
+  - query: "which stale debugger process was consuming several gigabytes of memory"
+    project: shell-optimization
+    expected: ["Killed stale lldb-rpc-server using 3.6GB RAM"]
+
+  - query: "how can selected Microsoft 365 applications be removed on macOS"
+    project: shell-optimization
+    expected: ["Selectively uninstall Microsoft 365 apps on macOS"]
+
+  - query: "how does the paste service run with gunicorn and Docker Compose"
+    project: pastebin-service
+    expected: ["Dockerized pastebin-service (gunicorn + compose, host port 5"]
+
+  - query: "what features and test coverage were added to the Flask paste service"
+    project: pastebin-service
+    expected: ["Feature-rich pastebin: design + build on feature-rich-pasteb"]
+
+  - query: "why can nearest-neighbor memory search return unrelated zero-score results"
+    project: claude-local-memory
+    expected: ["Issue #5 root cause: zero-score nearest-neighbor"]
+
+  - query: "how does vault import deduplicate repeated titles and handle Windows markdown"
+    project: claude-local-memory
+    expected: ["Hardened import dedupe and markdown parsing"]
+
+  - query: "why was filtering in the terminal dashboard slow"
+    project: claude-local-memory
+    expected: ["Optimized dashboard refresh hot paths"]
+
+  - query: "how can automatic project context be disabled for one coding agent"
+    project: claude-local-memory
+    expected: ["Agent-level context retrieval must be toggleable"]
+
+  # Negative controls: no memory should be injected for unrelated work.
+  - query: "prepare a sourdough starter feeding schedule"
+    project: todo-app
+    expected: []
+
+  - query: "compare hotel prices for a weekend trip"
+    project: learn-kubernetes
+    expected: []
+
+  - query: "write a strength training plan"
+    project: pastebin-service
+    expected: []
+
+  - query: "forecast tomorrow's rainfall"
+    project: shell-optimization
+    expected: []

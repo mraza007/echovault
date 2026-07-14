@@ -15,8 +15,13 @@ class EmbeddingConfig:
 
 @dataclass
 class ContextConfig:
+    mode: str = "auto"
     semantic: str = "auto"
     topup_recent: bool = True
+    token_budget: int = 1200
+    min_relevance: float = 0.7
+    min_vector_similarity: float = 0.05
+    agent_modes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -126,7 +131,29 @@ def load_config(path: str) -> MemoryConfig:
     if "context" in data:
         cx = data["context"]
         config.context = ContextConfig(
+            mode=cx.get("mode", "auto"),
             semantic=cx.get("semantic", "auto"),
             topup_recent=cx.get("topup_recent", True),
+            token_budget=int(cx.get("token_budget", 1200)),
+            min_relevance=float(cx.get("min_relevance", 0.7)),
+            min_vector_similarity=float(cx.get("min_vector_similarity", 0.05)),
+            agent_modes=dict(cx.get("agent_modes", {}) or {}),
         )
     return config
+
+
+def resolve_context_mode(config: MemoryConfig, agent: Optional[str] = None) -> tuple[str, str]:
+    """Resolve automatic context policy and report where it came from.
+
+    Precedence: ``MEMORY_CONTEXT`` session override, agent override, global mode.
+    Invalid values degrade to ``auto`` rather than unexpectedly disabling memory.
+    """
+    env_mode = os.environ.get("MEMORY_CONTEXT", "").strip().lower()
+    if env_mode in {"on", "off", "auto"}:
+        return env_mode, "env"
+    if agent:
+        agent_mode = config.context.agent_modes.get(agent, "").strip().lower()
+        if agent_mode in {"on", "off", "auto"}:
+            return agent_mode, f"agent:{agent}"
+    mode = str(config.context.mode).strip().lower()
+    return (mode if mode in {"on", "off", "auto"} else "auto"), "config"

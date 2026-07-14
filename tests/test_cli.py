@@ -708,6 +708,28 @@ def test_context_no_memories(env_home):
     assert "No memories found." in result.output
 
 
+def test_context_can_be_disabled_with_environment(env_home, monkeypatch):
+    monkeypatch.setenv("MEMORY_CONTEXT", "off")
+    result = CliRunner().invoke(main, ["context", "--agent", "codex"])
+    assert result.exit_code == 0
+    assert "disabled" in result.output
+
+
+def test_config_context_sets_agent_override(env_home):
+    result = CliRunner().invoke(main, ["config", "context", "on", "--agent", "codex"])
+    assert result.exit_code == 0
+    assert "context: on (agent:codex)" in result.output
+
+
+def test_search_explain_prints_ranking(env_home):
+    service = MemoryService(memory_home=str(env_home))
+    service.save(RawMemoryInput(title="Auth playbook", what="Run auth tests", category="playbook"), project="test-project")
+    service.close()
+    result = CliRunner().invoke(main, ["search", "auth", "--explain"])
+    assert result.exit_code == 0
+    assert "Ranking:" in result.output
+
+
 def test_context_lists_recent_memories(env_home):
     """Test that memory context lists recent memories as pointers."""
     service = MemoryService(memory_home=str(env_home))

@@ -111,7 +111,7 @@ class TestMemorySearchTool:
 
         result = handle_memory_search(
             seeded_service,
-            query="authentication",
+            query="auth",
         )
         data = json.loads(result)
         assert len(data) > 0
@@ -146,6 +146,14 @@ class TestMemorySearchTool:
 
 
 class TestMemoryContextTool:
+    def test_context_description_requires_task_query_and_agent_identity(self):
+        from memory.mcp_server import CONTEXT_DESCRIPTION
+
+        assert "current user request" in CONTEXT_DESCRIPTION
+        assert "`query`" in CONTEXT_DESCRIPTION
+        assert "`agent`" in CONTEXT_DESCRIPTION
+        assert "claude-code" in CONTEXT_DESCRIPTION
+
     def test_context_returns_recent_memories(self, seeded_service):
         from memory.mcp_server import handle_memory_context
 
