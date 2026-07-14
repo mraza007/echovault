@@ -6,6 +6,23 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-13
+
+### Added
+- Added explicit living-memory types for playbooks, known fixes, constraints, project state, and active work.
+- Added task-aware, token-budgeted context packs that combine relevant decisions, unresolved work, active bugs, reusable patterns, and recent memories.
+- Added structured playbook fields for triggers, prerequisites, steps, verification, follow-ups, constraints, rejected alternatives, and open questions.
+- Added provenance and validity metadata, including confidence, validity windows, commit, branch, structured links, verification timestamps, and supersession.
+- Added retrieval evaluation against redacted golden datasets with recall, ranking quality, irrelevant-result rate, latency, and context-token metrics.
+- Added relevance calibration sweeps, configurable lexical/vector/hybrid thresholds, explicit empty results, and raw score diagnostics through `--explain`.
+- Added local retrieval feedback counters and human-reviewable lifecycle proposals for duplicates, contradictions, stale context, completed follow-ups, and broad session dumps.
+- Added `memory doctor` health checks for vault/index drift, vectors, references, lifecycle issues, growth, latency, and configuration risks.
+- Added refreshed agent integrations and project-local skills for both Claude Code and Codex, including an agent-level on/off switch.
+
+### Changed
+- Reframed EchoVault as a continuously maintained project working model designed to reduce repeated discovery and tool round trips.
+- Expanded the README with the living-memory workflow, operational success metrics, evaluation guidance, and real-world redacted dataset curation process.
+
 ## [0.4.0] - 2026-03-25
 
 ### Changed
@@ -54,4 +71,3 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 ### Fixed
 - Fixed import behavior for same-title memories across session files.
 - Fixed import decoding for legacy cp1251 and UTF-8 BOM/CRLF markdown inputs.
-
