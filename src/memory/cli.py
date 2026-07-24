@@ -5,6 +5,7 @@ All commands use the MemoryService for business logic.
 """
 
 import os
+import shutil
 from dataclasses import asdict
 
 import yaml
@@ -52,12 +53,19 @@ def main():
     pass
 
 
+def _initialize_vault() -> tuple[str, bool]:
+    """Create the vault directory and report whether it was newly created."""
+    home = get_memory_home()
+    vault_dir = os.path.join(home, "vault")
+    created = not os.path.isdir(vault_dir)
+    os.makedirs(vault_dir, exist_ok=True)
+    return home, created
+
+
 @main.command()
 def init():
     """Initialize the memory vault."""
-    home = get_memory_home()
-    vault_dir = os.path.join(home, "vault")
-    os.makedirs(vault_dir, exist_ok=True)
+    home, _ = _initialize_vault()
     click.echo(f"Memory vault initialized at {home}")
 
 
@@ -676,56 +684,141 @@ def _resolve_config_dir(agent_dot_dir: str, config_dir: str | None, project: boo
     return os.path.join(os.path.expanduser("~"), agent_dot_dir)
 
 
-@main.group()
-def setup():
-    """Install EchoVault hooks for an agent."""
-    pass
+_AGENTS = {
+    "claude-code": {"command": "claude", "config_dir": ".claude"},
+    "cursor": {"command": "cursor", "config_dir": ".cursor"},
+    "codex": {"command": "codex", "config_dir": ".codex"},
+    "opencode": {"command": "opencode", "config_dir": ".config/opencode"},
+}
+
+
+def _detect_agents() -> list[str]:
+    """Return supported agents that appear to be installed."""
+    home = os.path.expanduser("~")
+    detected = []
+    for agent, metadata in _AGENTS.items():
+        command_found = shutil.which(metadata["command"]) is not None
+        config_found = os.path.exists(os.path.join(home, metadata["config_dir"]))
+        if command_found or config_found:
+            detected.append(agent)
+    return detected
+
+
+def _setup_agent(agent: str, *, project: bool) -> dict[str, str]:
+    """Run setup for one supported agent using its default config location."""
+    if agent == "claude-code":
+        from memory.setup import setup_claude_code
+
+        target = _resolve_config_dir(".claude", None, project)
+        return setup_claude_code(target, project=project)
+    if agent == "cursor":
+        from memory.setup import setup_cursor
+
+        target = _resolve_config_dir(".cursor", None, project)
+        return setup_cursor(target)
+    if agent == "codex":
+        from memory.setup import setup_codex
+
+        target = _resolve_config_dir(".codex", None, project)
+        return setup_codex(target)
+    if agent == "opencode":
+        from memory.setup import setup_opencode
+
+        return setup_opencode(project=project)
+    raise click.ClickException(f"Unsupported agent: {agent}")
+
+
+def _finish_setup(agent: str, result: dict[str, str]) -> None:
+    """Print a consistent setup result and activation hint."""
+    home, created = _initialize_vault()
+    if created:
+        click.echo(f"Initialized memory vault at {home}")
+    click.echo(result["message"])
+    click.echo(f"Ready. Restart {agent} to load EchoVault.")
+
+
+@main.group(invoke_without_command=True)
+@click.option(
+    "--project",
+    is_flag=True,
+    default=False,
+    help="Install in the current project instead of globally",
+)
+@click.pass_context
+def setup(ctx, project):
+    """Set up EchoVault for an agent.
+
+    Run without a subcommand for guided setup, or select an agent directly:
+    ``memory setup codex``.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    detected = _detect_agents()
+    choices = list(_AGENTS)
+
+    if len(detected) == 1:
+        agent = detected[0]
+        click.echo(f"Detected {agent}.")
+    else:
+        if detected:
+            click.echo(f"Detected: {', '.join(detected)}")
+        else:
+            click.echo("No supported agent was detected automatically.")
+        agent = click.prompt(
+            "Which agent should EchoVault configure?",
+            type=click.Choice(choices, case_sensitive=False),
+            show_choices=True,
+        )
+
+    result = _setup_agent(agent, project=project)
+    _finish_setup(agent, result)
 
 
 @setup.command("claude-code")
 @click.option("--config-dir", default=None, help="Path to .claude directory")
 @click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
 def setup_claude_code_cmd(config_dir, project):
-    """Install hooks into Claude Code settings."""
+    """Set up EchoVault for Claude Code."""
     from memory.setup import setup_claude_code
 
     target = _resolve_config_dir(".claude", config_dir, project)
     result = setup_claude_code(target, project=project)
-    click.echo(result["message"])
+    _finish_setup("claude-code", result)
 
 
 @setup.command("cursor")
 @click.option("--config-dir", default=None, help="Path to .cursor directory")
 @click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
 def setup_cursor_cmd(config_dir, project):
-    """Install hooks into Cursor hooks.json."""
+    """Set up EchoVault for Cursor."""
     from memory.setup import setup_cursor
 
     target = _resolve_config_dir(".cursor", config_dir, project)
     result = setup_cursor(target)
-    click.echo(result["message"])
+    _finish_setup("cursor", result)
 
 
 @setup.command("codex")
 @click.option("--config-dir", default=None, help="Path to .codex directory")
 @click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
 def setup_codex_cmd(config_dir, project):
-    """Install EchoVault section into Codex AGENTS.md and config.toml."""
+    """Set up EchoVault for Codex."""
     from memory.setup import setup_codex
 
     target = _resolve_config_dir(".codex", config_dir, project)
     result = setup_codex(target)
-    click.echo(result["message"])
+    _finish_setup("codex", result)
 
 
 @setup.command("opencode")
 @click.option("--project", is_flag=True, default=False, help="Install in current project instead of globally")
 def setup_opencode_cmd(project):
-    """Install EchoVault MCP server into OpenCode."""
+    """Set up EchoVault for OpenCode."""
     from memory.setup import setup_opencode
 
     result = setup_opencode(project=project)
-    click.echo(result["message"])
+    _finish_setup("opencode", result)
 
 
 @main.group()

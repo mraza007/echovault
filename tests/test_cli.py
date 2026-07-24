@@ -933,6 +933,48 @@ def test_setup_help_shows_agents(env_home):
     assert "codex" in result.output
 
 
+def test_setup_without_subcommand_detects_single_agent(env_home, tmp_path, monkeypatch):
+    """Guided setup skips the prompt when exactly one agent is detected."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("memory.cli.shutil.which", lambda command: "/usr/bin/codex" if command == "codex" else None)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup"])
+
+    assert result.exit_code == 0
+    assert "Detected codex." in result.output
+    assert "Ready. Restart codex" in result.output
+    assert (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_setup_without_subcommand_prompts_for_agent(env_home, tmp_path, monkeypatch):
+    """Guided setup offers all supported agents when detection finds none."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("memory.cli.shutil.which", lambda command: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup"], input="cursor\n")
+
+    assert result.exit_code == 0
+    assert "No supported agent was detected automatically." in result.output
+    assert "Ready. Restart cursor" in result.output
+    assert (tmp_path / ".cursor" / "mcp.json").exists()
+
+
+def test_setup_initializes_missing_vault(tmp_path, monkeypatch):
+    """Direct setup also creates the vault, making memory init optional."""
+    memory_home = tmp_path / "memory-home"
+    config_dir = tmp_path / ".cursor"
+    monkeypatch.setenv("MEMORY_HOME", str(memory_home))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "cursor", "--config-dir", str(config_dir)])
+
+    assert result.exit_code == 0
+    assert "Initialized memory vault" in result.output
+    assert (memory_home / "vault").is_dir()
+
+
 def test_setup_claude_code_creates_hooks(env_home, tmp_path):
     """Test that memory setup claude-code installs hooks."""
     claude_dir = tmp_path / ".claude"

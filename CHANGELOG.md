@@ -6,6 +6,14 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- Added a curl-friendly POSIX installer that prefers `uv` or `pipx`, falls back to an isolated virtual environment, and can configure a selected agent and project scope in one command.
+- Added guided `memory setup` with installed-agent detection.
+
+### Changed
+- `memory setup <agent>` now initializes the memory vault automatically and prints a restart hint.
+- Replaced global `pip install` guidance with isolated installation paths and documented the unrelated package occupying the `echovault` name on PyPI.
+
 ## [0.5.0] - 2026-07-13
 
 ### Added

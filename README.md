@@ -52,20 +52,67 @@ I built EchoVault to solve this: local memory persistence for coding agents that
 
 ## Install
 
-Install the latest stable release:
+Install the current version and launch guided agent setup:
 
 ```bash
-pip install git+https://github.com/mraza007/echovault.git@v0.5.0
-memory init
+curl -LsSf https://raw.githubusercontent.com/mraza007/echovault/main/install.sh | sh
+```
+
+The curl installer supports macOS and Linux. Windows users can use the manual
+`pipx` flow below.
+
+The installer uses `uv` or `pipx` when either is available. Otherwise it creates
+a dedicated virtual environment under `~/.local/share/echovault`—it never
+modifies the system Python. It then detects installed agents, initializes the
+local vault, and installs the MCP configuration. Restart the selected agent
+afterward.
+
+To skip the prompt or install only for the current project:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/mraza007/echovault/main/install.sh \
+  | sh -s -- --agent codex
+
+curl -LsSf https://raw.githubusercontent.com/mraza007/echovault/main/install.sh \
+  | sh -s -- --agent codex --project
+```
+
+Want to inspect the script before running it?
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/mraza007/echovault/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+```
+
+> **Important:** keep the full Git URL in the install command. The bare
+> `echovault` name on PyPI belongs to an unrelated project.
+
+### Manual install
+
+If you prefer not to run a downloaded shell script, install with an isolated
+Python application manager:
+
+```bash
+# With uv
+uv tool install 'git+https://github.com/mraza007/echovault.git@main'
+
+# Or with pipx
+pipx install 'git+https://github.com/mraza007/echovault.git@main'
+
+memory setup
 memory setup claude-code   # or: cursor, codex, opencode
 ```
 
-That's it. `memory setup` installs MCP server config automatically.
+See the [pipx installation guide](https://pipx.pypa.io/latest/how-to/install-pipx.html)
+for macOS, Linux, and Windows prerequisites.
 
-If you want the newest unreleased changes from `main`, install directly from the branch instead:
+To pin a version, replace `main` with a release tag in the Git URL, or pass it
+to the installer:
 
 ```bash
-pip install git+https://github.com/mraza007/echovault.git@main
+curl -LsSf https://raw.githubusercontent.com/mraza007/echovault/main/install.sh \
+  | sh -s -- --version v0.5.0 --agent codex
 ```
 
 Release notes live in [CHANGELOG.md](CHANGELOG.md) and on the [GitHub Releases](https://github.com/mraza007/echovault/releases) page.
@@ -74,6 +121,7 @@ By default config is installed globally. To install for a specific project:
 
 ```bash
 cd ~/my-project
+memory setup --project               # guided setup
 memory setup claude-code --project   # writes .mcp.json in project root
 memory setup opencode --project      # writes opencode.json in project root
 memory setup codex --project         # writes .codex/config.toml + AGENTS.md
@@ -335,8 +383,9 @@ task-aware skill that tells Claude to pass the current request as `query` and
 
 | Command | Description |
 |---------|-------------|
-| `memory init` | Create vault at effective memory home |
-| `memory setup <agent>` | Install MCP server config for an agent |
+| `memory init` | Create vault at effective memory home (setup also does this) |
+| `memory setup` | Detect an agent and run guided setup |
+| `memory setup <agent>` | Initialize the vault and configure a specific agent |
 | `memory uninstall <agent>` | Remove MCP server config for an agent |
 | `memory save ...` | Save a memory (`--details-file` and `--details-template` supported) |
 | `memory search "query"` | Hybrid FTS + semantic search |
@@ -363,8 +412,12 @@ task-aware skill that tells Claude to pass the current request as `query` and
 
 ```bash
 memory uninstall claude-code   # or: cursor, codex, opencode
-pip uninstall echovault
+uv tool uninstall echovault    # if installed with uv
+pipx uninstall echovault       # if installed with pipx
 ```
+
+For the fallback venv installation, remove the `~/.local/bin/memory` symlink and
+`~/.local/share/echovault` directory.
 
 To also remove all stored memories: `rm -rf ~/.memory/`
 
