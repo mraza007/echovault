@@ -37,3 +37,5 @@ class OllamaEmbedding(EmbeddingProvider):
         )
         resp.raise_for_status()
         return resp.json()["embedding"]
+
+    search = embed
