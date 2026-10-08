@@ -6,6 +6,9 @@ The format is inspired by Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Bounded the `mcp` dependency to `>=1.0,<2`. The requirement was unbounded, so a fresh install resolved the v2 SDK, whose lowlevel server API dropped the v1 decorators the server is built on. `memory mcp` then died at startup with `AttributeError: 'Server' object has no attribute 'list_tools'`, leaving every new install with a non-functional MCP server.
+
 ### Added
 - Added a curl-friendly POSIX installer that prefers `uv` or `pipx`, falls back to an isolated virtual environment, and can configure a selected agent and project scope in one command.
 - Added guided `memory setup` with installed-agent detection.
